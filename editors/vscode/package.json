@@ -1,9 +1,9 @@
 {
   "name": "trust-lsp",
   "displayName": "truST LSP",
-  "description": "truST LSP — IEC 61131-3 Structured Text language support",
+  "description": "truST LSP \u2014 IEC 61131-3 Structured Text language support",
   "icon": "icon.png",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "publisher": "trust-lsp",
   "license": "MIT",
   "engines": {
@@ -216,7 +216,11 @@
               "description": "Zero-based character position"
             }
           },
-          "required": ["filePath", "line", "character"]
+          "required": [
+            "filePath",
+            "line",
+            "character"
+          ]
         }
       },
       {
@@ -251,7 +255,9 @@
               "description": "Optional zero-based end character"
             }
           },
-          "required": ["filePath"]
+          "required": [
+            "filePath"
+          ]
         }
       },
       {
@@ -320,7 +326,10 @@
               "default": false
             }
           },
-          "required": ["filePath", "text"]
+          "required": [
+            "filePath",
+            "text"
+          ]
         }
       },
       {
@@ -379,7 +388,10 @@
               "default": false
             }
           },
-          "required": ["filePath", "edits"]
+          "required": [
+            "filePath",
+            "edits"
+          ]
         }
       },
       {
@@ -398,7 +410,9 @@
               "description": "Absolute path to the .st file"
             }
           },
-          "required": ["filePath"]
+          "required": [
+            "filePath"
+          ]
         }
       },
       {
@@ -425,7 +439,11 @@
               "description": "Zero-based character position"
             }
           },
-          "required": ["filePath", "line", "character"]
+          "required": [
+            "filePath",
+            "line",
+            "character"
+          ]
         }
       },
       {
@@ -452,7 +470,11 @@
               "description": "Zero-based character position"
             }
           },
-          "required": ["filePath", "line", "character"]
+          "required": [
+            "filePath",
+            "line",
+            "character"
+          ]
         }
       },
       {
@@ -479,7 +501,11 @@
               "description": "Zero-based character position"
             }
           },
-          "required": ["filePath", "line", "character"]
+          "required": [
+            "filePath",
+            "line",
+            "character"
+          ]
         }
       },
       {
@@ -506,7 +532,11 @@
               "description": "Zero-based character position"
             }
           },
-          "required": ["filePath", "line", "character"]
+          "required": [
+            "filePath",
+            "line",
+            "character"
+          ]
         }
       },
       {
@@ -538,7 +568,11 @@
               "default": true
             }
           },
-          "required": ["filePath", "line", "character"]
+          "required": [
+            "filePath",
+            "line",
+            "character"
+          ]
         }
       },
       {
@@ -569,7 +603,11 @@
               "description": "Optional trigger character, e.g. '.' or ':'"
             }
           },
-          "required": ["filePath", "line", "character"]
+          "required": [
+            "filePath",
+            "line",
+            "character"
+          ]
         }
       },
       {
@@ -596,7 +634,11 @@
               "description": "Zero-based character position"
             }
           },
-          "required": ["filePath", "line", "character"]
+          "required": [
+            "filePath",
+            "line",
+            "character"
+          ]
         }
       },
       {
@@ -615,7 +657,9 @@
               "description": "Absolute path to the .st file"
             }
           },
-          "required": ["filePath"]
+          "required": [
+            "filePath"
+          ]
         }
       },
       {
@@ -638,7 +682,9 @@
               "description": "Maximum number of results to return"
             }
           },
-          "required": ["query"]
+          "required": [
+            "query"
+          ]
         }
       },
       {
@@ -669,7 +715,12 @@
               "description": "New symbol name"
             }
           },
-          "required": ["filePath", "line", "character", "newName"]
+          "required": [
+            "filePath",
+            "line",
+            "character",
+            "newName"
+          ]
         }
       },
       {
@@ -688,7 +739,9 @@
               "description": "Absolute path to the .st file"
             }
           },
-          "required": ["filePath"]
+          "required": [
+            "filePath"
+          ]
         }
       },
       {
@@ -848,7 +901,9 @@
               "description": "Optional partialResultToken to attach to params"
             }
           },
-          "required": ["method"]
+          "required": [
+            "method"
+          ]
         }
       },
       {
@@ -871,7 +926,9 @@
               "description": "Optional LSP params"
             }
           },
-          "required": ["method"]
+          "required": [
+            "method"
+          ]
         }
       },
       {
@@ -890,7 +947,9 @@
               "description": "Absolute path to the .st file"
             }
           },
-          "required": ["filePath"]
+          "required": [
+            "filePath"
+          ]
         }
       },
       {
@@ -913,7 +972,10 @@
               "description": "Previous semantic tokens result id"
             }
           },
-          "required": ["filePath", "previousResultId"]
+          "required": [
+            "filePath",
+            "previousResultId"
+          ]
         }
       },
       {
@@ -1022,7 +1084,11 @@
               "description": "Zero-based character position"
             }
           },
-          "required": ["filePath", "line", "character"]
+          "required": [
+            "filePath",
+            "line",
+            "character"
+          ]
         }
       },
       {
@@ -1045,7 +1111,9 @@
               "description": "Whether to resolve link targets"
             }
           },
-          "required": ["filePath"]
+          "required": [
+            "filePath"
+          ]
         }
       },
       {
@@ -1068,7 +1136,9 @@
               "description": "Whether to resolve code lens commands"
             }
           },
-          "required": ["filePath"]
+          "required": [
+            "filePath"
+          ]
         }
       },
       {
@@ -1100,11 +1170,17 @@
                     "description": "Zero-based character position"
                   }
                 },
-                "required": ["line", "character"]
+                "required": [
+                  "line",
+                  "character"
+                ]
               }
             }
           },
-          "required": ["filePath", "positions"]
+          "required": [
+            "filePath",
+            "positions"
+          ]
         }
       },
       {
@@ -1135,7 +1211,12 @@
               "description": "Trigger character, e.g. ';'"
             }
           },
-          "required": ["filePath", "line", "character", "triggerCharacter"]
+          "required": [
+            "filePath",
+            "line",
+            "character",
+            "triggerCharacter"
+          ]
         }
       },
       {
@@ -1162,7 +1243,11 @@
               "description": "Zero-based character position"
             }
           },
-          "required": ["filePath", "line", "character"]
+          "required": [
+            "filePath",
+            "line",
+            "character"
+          ]
         }
       },
       {
@@ -1181,7 +1266,9 @@
               "description": "CallHierarchyItem to query"
             }
           },
-          "required": ["item"]
+          "required": [
+            "item"
+          ]
         }
       },
       {
@@ -1200,7 +1287,9 @@
               "description": "CallHierarchyItem to query"
             }
           },
-          "required": ["item"]
+          "required": [
+            "item"
+          ]
         }
       },
       {
@@ -1227,7 +1316,11 @@
               "description": "Zero-based character position"
             }
           },
-          "required": ["filePath", "line", "character"]
+          "required": [
+            "filePath",
+            "line",
+            "character"
+          ]
         }
       },
       {
@@ -1246,7 +1339,9 @@
               "description": "TypeHierarchyItem to query"
             }
           },
-          "required": ["item"]
+          "required": [
+            "item"
+          ]
         }
       },
       {
@@ -1265,7 +1360,9 @@
               "description": "TypeHierarchyItem to query"
             }
           },
-          "required": ["item"]
+          "required": [
+            "item"
+          ]
         }
       },
       {
@@ -1295,7 +1392,9 @@
               "description": "Optional path filters to apply"
             }
           },
-          "required": ["query"]
+          "required": [
+            "query"
+          ]
         }
       },
       {
@@ -1326,7 +1425,10 @@
               "description": "Whether to use a workspace edit for the rename"
             }
           },
-          "required": ["oldPath", "newPath"]
+          "required": [
+            "oldPath",
+            "newPath"
+          ]
         }
       },
       {
@@ -1345,12 +1447,21 @@
               "description": "Configuration key, e.g. trust-lsp.trace.server"
             },
             "value": {
-              "type": ["string", "number", "boolean", "null"],
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ],
               "description": "New value for the setting"
             },
             "scope": {
               "type": "string",
-              "enum": ["workspace", "global", "workspaceFolder"],
+              "enum": [
+                "workspace",
+                "global",
+                "workspaceFolder"
+              ],
               "description": "Optional settings scope"
             },
             "filePath": {
@@ -1366,7 +1477,10 @@
               "description": "Force a pull-diagnostics request after updating the setting"
             }
           },
-          "required": ["key", "value"]
+          "required": [
+            "key",
+            "value"
+          ]
         }
       },
       {
