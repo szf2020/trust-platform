@@ -1,0 +1,41 @@
+[package]
+name = "trust-runtime"
+description = "Runtime interpreter for IEC 61131-3 Structured Text"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+trust-syntax.workspace = true
+trust-hir.workspace = true
+smol_str.workspace = true
+rustc-hash.workspace = true
+indexmap = { workspace = true, features = ["serde"] }
+thiserror.workspace = true
+tracing.workspace = true
+crc32fast.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+clap.workspace = true
+clap_complete.workspace = true
+qrcode.workspace = true
+urlencoding.workspace = true
+anyhow.workspace = true
+glob.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+dialoguer.workspace = true
+indicatif.workspace = true
+owo-colors.workspace = true
+tiny_http = "0.12"
+mdns-sd = "0.10"
+base64 = "0.22"
+rand = "0.8"
+ureq = "2"
+
+[features]
+default = ["debug"]
+debug = []

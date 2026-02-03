@@ -1,0 +1,39 @@
+//! Test harness for driving runtime cycles.
+
+#![allow(missing_docs)]
+
+mod api;
+mod build;
+mod coerce;
+mod compiler;
+mod config;
+#[allow(clippy::module_inception)]
+mod harness;
+mod io;
+mod lower;
+mod parse;
+mod types;
+mod util;
+
+pub use api::{
+    bytecode_bytes_from_source, bytecode_bytes_from_source_with_path, bytecode_bytes_from_sources,
+    bytecode_bytes_from_sources_with_paths, bytecode_module_from_source,
+    bytecode_module_from_source_with_path, bytecode_module_from_sources,
+    bytecode_module_from_sources_with_paths, CompileSession,
+};
+pub use coerce::coerce_value_to_type;
+pub use harness::TestHarness;
+pub use parse::{parse_debug_expression, parse_debug_lvalue};
+pub use types::{CompileError, CycleResult, SourceFile};
+
+use compiler::{
+    class_type_name, function_block_type_name, interface_type_name, lower_classes,
+    lower_configuration, lower_function_blocks, lower_functions, lower_interfaces, lower_programs,
+    lower_type_decls, lower_type_ref, predeclare_classes, predeclare_function_blocks,
+    predeclare_interfaces, resolve_program_type_name, resolve_type_name, LoweringContext,
+};
+use compiler::{
+    AccessDecl, AccessPart, AccessPath, ConfigInit, GlobalInit, ProgramInstanceConfig,
+    ResolvedAccess, WildcardRequirement,
+};
+use lower::lower_expr;

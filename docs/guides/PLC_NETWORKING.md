@@ -1,0 +1,35 @@
+# PLC Networking & Remote Access
+
+This guide explains which ports are used and how to enable remote access safely.
+
+## Default ports
+
+- Web UI: **8080** (HTTP)
+- Discovery: **mDNS** (UDP 5353)
+- Mesh/data: **5200** (TCP/UDP as configured)
+
+## Local‑only by default
+
+trueST ships in local‑only mode by default. To enable remote access:
+
+1. Enable a TCP control endpoint in `runtime.toml`.
+2. Set `runtime.control.auth_token` (required for TCP).
+3. Use the pairing flow in the Web UI to share access.
+
+## Firewall checklist
+
+- Allow inbound TCP 8080 for Web UI (if remote web access is required).
+- Allow UDP 5353 for discovery (LAN only).
+- Allow TCP/UDP 5200 if mesh is enabled.
+
+## Recommended remote access options
+
+- VPN (WireGuard or OpenVPN)
+- SSH tunnel for Web UI
+
+## Troubleshooting
+
+If remote access fails:
+- Check that the PLC is reachable by IP.
+- Verify firewall rules.
+- Confirm `runtime.control.auth_token` is set for TCP control.

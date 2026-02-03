@@ -1,0 +1,366 @@
+@startuml hir-semantics
+!theme plain
+allowmixing
+skinparam backgroundColor #FEFEFE
+skinparam componentStyle uml2
+skinparam linetype ortho
+skinparam nodesep 50
+skinparam ranksep 35
+
+title truST HIR: Symbol Collection & Type System
+
+' ============================================================
+' DATABASE LAYER
+' ============================================================
+package "Database Layer" as dbLayer #LightGreen {
+
+    class "Database" as db <<db/queries.rs:46-50>> {
+        sources: FxHashMap<FileId, Arc<String>>
+        symbol_cache: RwLock<FxHashMap<FileId, CacheEntry<SymbolTable>>>
+        analysis_cache: RwLock<FxHashMap<FileId, CacheEntry<FileAnalysis>>>
+        revision: RwLock<u64>
+        --
+        +new() → Database
+        +set_source_text(file_id, text)
+        +file_symbols(file_id) → Arc<SymbolTable>
+        +diagnostics(file_id) → Arc<Vec<Diagnostic>>
+        +analyze(file_id) → FileAnalysis
+        +invalidate(file_id)
+    }
+
+    class "FileId" as fileId {
+        id: u32
+    }
+
+    note right of db
+        Manual caching with FxHashMap
+        (not using salsa queries directly)
+
+        Any source change bumps the
+        revision and clears caches
+        (cross-file dependencies).
+
+        analyze() returns symbols +
+        diagnostics from one pass
+        (used by diagnostics and
+        file_symbols_with_project).
+
+        project_symbol_tables() merges
+        symbols across all files
+    end note
+}
+
+' ============================================================
+' SYMBOL COLLECTION PHASES
+' ============================================================
+package "Symbol Collection" as collection #LightCoral {
+
+    class "SymbolCollector" as collector <<db/queries/collector/mod.rs:12-20>> {
+        table: SymbolTable
+        diagnostics: DiagnosticBuilder
+        pending_types: Vec<PendingType>
+        parent_stack: Vec<SymbolId>
+        const_exprs: FxHashMap
+        const_values: FxHashMap
+        program_instances: FxHashMap<SmolStr, SymbolId>
+        --
+        +collect(root) → (SymbolTable, Vec<Diagnostic>)
+    }
+
+    rectangle "Collection Phases" as phases #Wheat {
+        card "1. phase_precollect()" as p1
+        card "2. phase_collect_symbols()" as p2
+        card "3. phase_access_and_config()" as p3
+        card "4. phase_resolve_types()" as p4
+        card "5. phase_global_links()" as p5
+        card "6. phase_var_validation()" as p6
+        card "7. phase_constants()" as p7
+    }
+
+    p1 --> p2
+    p2 --> p3
+    p3 --> p4
+    p4 --> p5
+    p5 --> p6
+    p6 --> p7
+
+    note right of phases
+        **Phase Details:**
+        1. Collect POUs and types (names only)
+        2. Main CST traversal via visit_node()
+        3. VAR_ACCESS, VAR_CONFIG validation
+        4. Resolve pending type references
+        5. Check global/external links
+        6. Variable block validation
+        7. Evaluate constant expressions
+    end note
+
+    collector --> phases
+}
+
+' ============================================================
+' SYMBOL TABLE
+' ============================================================
+package "Symbol Table" as symTablePkg #LightBlue {
+
+    class "SymbolTable" as symTable <<symbols/table.rs:9-32>> {
+        symbols: FxHashMap<SymbolId, Symbol>
+        scopes: Vec<Scope>
+        current_scope: ScopeId
+        global_names: FxHashMap<SmolStr, SymbolId>
+        type_names: FxHashMap<SmolStr, TypeId>
+        types: FxHashMap<TypeId, Type>
+        extends: FxHashMap<SymbolId, SmolStr>
+        implements: FxHashMap<SymbolId, Vec<SmolStr>>
+        const_values: FxHashMap<...>
+        next_id: u32
+        next_type_id: u32
+        --
+        +push_scope(kind, owner) → ScopeId
+        +pop_scope()
+        +add_symbol(name, kind, range) → SymbolId
+        +resolve_name(name) → Option<SymbolId>
+        +get_type(id) → Option<Type>
+    }
+
+    class "Symbol" as symbol <<symbols/defs.rs:176-201>> {
+        id: SymbolId
+        name: SmolStr
+        kind: SymbolKind
+        type_id: TypeId
+        direct_address: Option<SmolStr>
+        visibility: Visibility
+        modifiers: SymbolModifiers
+        range: TextRange
+        origin: Option<SymbolOrigin>
+        parent: Option<SymbolId>
+        doc: Option<SmolStr>
+    }
+
+    class "Scope" as scope <<symbols/defs.rs:249-262>> {
+        id: ScopeId
+        parent: Option<ScopeId>
+        owner: Option<SymbolId>
+        symbols: FxHashMap<SmolStr, SymbolId>
+        kind: ScopeKind
+        using_directives: Vec<UsingDirective>
+    }
+
+    symTable --> symbol : contains
+    symTable --> scope : manages
+}
+
+' ============================================================
+' SYMBOL KIND
+' ============================================================
+package "Symbol Kinds" as symKindPkg #PaleGreen {
+
+    enum "SymbolKind" as symKind <<symbols/defs.rs:60-112>> {
+        Program
+        Namespace
+        Function { return_type, parameters }
+        FunctionBlock
+        Class
+        Method { return_type, parameters }
+        Property { prop_type, has_get, has_set }
+        Interface
+        Variable { qualifier }
+        Constant
+        Type
+        EnumValue { value }
+        Parameter { direction }
+    }
+
+    enum "VarQualifier" as varQual <<symbols/defs.rs:117-136>> {
+        Local
+        Input
+        Output
+        InOut
+        Temp
+        Global
+        External
+        Access
+        Static
+    }
+
+    enum "ScopeKind" as scopeKind <<symbols/defs.rs:301-320>> {
+        Global
+        Namespace
+        Program
+        Function
+        FunctionBlock
+        Class
+        Method
+        Property
+        Block
+    }
+
+    symKind --> varQual
+}
+
+' ============================================================
+' TYPE SYSTEM
+' ============================================================
+package "Type System" as typeSys #Lavender {
+
+    class "TypeId" as typeId <<types/defs.rs:8-105>> {
+        id: u32
+        --
+        {static} UNKNOWN = 0
+        {static} VOID = 1
+        {static} BOOL = 2
+        {static} SINT = 3
+        {static} INT = 4
+        {static} DINT = 5
+        {static} LINT = 6
+        {static} USINT = 7
+        {static} UINT = 8
+        {static} UDINT = 9
+        {static} ULINT = 10
+        {static} REAL = 11
+        {static} LREAL = 12
+        {static} BYTE = 13
+        {static} WORD = 14
+        {static} DWORD = 15
+        {static} LWORD = 16
+        {static} TIME = 17
+        {static} LTIME = 18
+        {static} DATE = 19
+        {static} TOD = 20
+        {static} DT = 21
+        {static} STRING = 22
+        {static} WSTRING = 23
+        {static} LTOD = 24
+        {static} LDT = 25
+        {static} ANY = 26
+        {static} ANY_INT = 27
+        {static} ANY_REAL = 28
+        {static} ANY_NUM = 29
+        {static} ANY_BIT = 30
+        {static} ANY_STRING = 31
+        {static} ANY_DATE = 32
+        {static} NULL = 33
+        {static} CHAR = 34
+        {static} WCHAR = 35
+        {static} LDATE = 36
+        {static} ANY_DERIVED = 37
+        {static} ANY_ELEMENTARY = 38
+        {static} ANY_MAGNITUDE = 39
+        {static} ANY_UNSIGNED = 40
+        {static} ANY_SIGNED = 41
+        {static} ANY_DURATION = 42
+        {static} ANY_CHARS = 43
+        {static} ANY_CHAR = 44
+        {static} USER_TYPES_START = 100 (line 105)
+    }
+
+    enum "Type" as typeEnum <<types/defs.rs:232-391>> {
+        ' Special
+        Unknown, Void, Null
+        ' Elementary (simple variants)
+        Bool, SInt, Int, DInt, LInt
+        USInt, UInt, UDInt, ULInt
+        Real, LReal
+        Byte, Word, DWord, LWord
+        Time, LTime, Date, LDate, Tod, LTod, Dt, Ldt
+        Char, WChar
+        ' String with max_len
+        String { max_len }, WString { max_len }
+        ' Compound
+        Array { element, dimensions }
+        Struct { name, fields }
+        Union { name, variants }
+        Enum { name, base, values }
+        Pointer { target }, Reference { target }
+        Subrange { base, lower, upper }
+        ' POU types
+        FunctionBlock { name }, Class { name }
+        Interface { name }
+        ' Generic/ANY types
+        Any, AnyInt, AnyReal, AnyNum, AnyBit...
+        ' Alias
+        Alias { name, target }
+    }
+
+    class "TypeRegistry" as typeReg {
+        types: FxHashMap<TypeId, Type>
+        --
+        +get(id) → Option<Type>
+        +register(type) → TypeId
+        +resolve_name(name) → Option<TypeId>
+    }
+
+    typeId --> typeEnum : identifies
+    typeReg --> typeEnum : stores
+}
+
+' ============================================================
+' TYPE CHECKER
+' ============================================================
+package "Type Checking" as typeCheckPkg #Wheat {
+
+    class "TypeChecker" as typeChecker <<type_check/mod.rs>> {
+        table: &SymbolTable
+        diagnostics: &mut DiagnosticBuilder
+        --
+        +check_file(root)
+        +check_statement(stmt)
+        +check_expression(expr) → TypeId
+    }
+
+    package "Sub-Checkers" as subCheckers {
+        component "ExprChecker" as exprCheck <<type_check/expr.rs>>
+        component "StmtChecker" as stmtCheck <<type_check/stmt.rs>>
+        component "CallChecker" as callCheck <<type_check/calls/>>
+        component "StandardChecker" as stdCheck <<type_check/standard/>>
+    }
+
+    typeChecker --> subCheckers
+}
+
+note bottom of stdCheck
+    **Standard Functions:**
+    • numeric.rs - ABS, SQRT, SIN
+    • string.rs - LEN, CONCAT
+    • bit.rs - SHL, SHR, ROL
+    • time.rs - TIME operations
+    • conversions.rs - TO_*
+end note
+
+' ============================================================
+' CONNECTIONS
+' ============================================================
+
+db --> collector : uses
+collector --> symTable : builds
+symTable --> symKind : symbol kinds
+symTable --> typeSys : type info
+typeChecker --> symTable : queries
+typeChecker --> typeSys : resolves
+
+' ============================================================
+' LEGEND
+' ============================================================
+
+legend right
+    **Key Files:**
+    • db/queries.rs - Database impl
+    • db/queries/collector/mod.rs - Symbol collector
+    • symbols/table.rs - SymbolTable
+    • symbols/defs.rs - Symbol, SymbolKind
+    • types/defs.rs - TypeId, Type
+    • type_check/mod.rs - TypeChecker
+
+    **Type ID Constants:**
+    Built-in types: 0-99
+    User types: 100+
+
+    **ANY type hierarchy:**
+    ANY → ANY_NUM → ANY_INT, ANY_REAL
+    ANY → ANY_BIT
+    ANY → ANY_STRING → ANY_CHARS → ANY_CHAR
+    ANY → ANY_DATE
+    ANY → ANY_DERIVED
+end legend
+
+@enduml

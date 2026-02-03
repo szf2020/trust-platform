@@ -1,0 +1,685 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>truST Runtime</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230f1115'/%3E%3Ctext x='32' y='30' font-family='Inter,system-ui,sans-serif' font-size='32' font-weight='800' text-anchor='middle' fill='%23f2f2f2'%3Etru%3C/text%3E%3Ctext x='32' y='58' font-family='Inter,system-ui,sans-serif' font-size='32' font-weight='800' text-anchor='middle' fill='%2314b8a6'%3EST%3C/text%3E%3C/svg%3E"/>
+  <link rel="stylesheet" href="/styles.css"/>
+</head>
+<body>
+  <a class="skip-link" href="#mainContent">Skip to content</a>
+  <div class="app">
+    <aside class="sidebar" aria-label="Primary">
+      <div class="brand">
+        <svg class="brand-logo" viewBox="0 0 160 80">
+          <text x="20" y="50" class="logo-text">tru<tspan class="logo-accent">ST</tspan></text>
+          <text x="20" y="70" class="logo-tagline">open source plc toolchain</text>
+        </svg>
+      </div>
+      <nav class="nav" aria-label="Main navigation">
+        <button class="active" data-page="overview">Overview</button>
+        <button data-page="io">I/O</button>
+        <button data-page="logs">Logs</button>
+        <button data-page="program">Program</button>
+        <button data-page="deploy">Deploy</button>
+        <button data-page="settings">Settings</button>
+        <button data-page="network">Network</button>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="pill" id="statusPill" data-state="loading">loading</div>
+        <div class="muted" id="statusMeta">waiting for PLC</div>
+        <div class="connection" id="connectionBadge" data-state="offline">offline</div>
+        <div class="muted" id="statusUpdated">Last update: --</div>
+        <button class="toggle" id="themeToggle" onclick="toggleTheme()">Dark mode</button>
+      </div>
+    </aside>
+    <div class="content" id="mainContent">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow">System</div>
+          <h1 id="pageTitle">PLC Overview</h1>
+          <div class="meta" id="runtimeMeta">loading runtime metadata</div>
+        </div>
+        <div class="actions">
+          <button class="btn ghost" onclick="openShortcuts()">Shortcuts</button>
+          <button class="btn ghost" onclick="openSetup()">Setup</button>
+          <button class="btn primary" id="runToggle" onclick="toggleRun()" aria-label="Pause PLC">Pause</button>
+        </div>
+      </header>
+      <main>
+        <section class="page" data-page="overview">
+          <div class="tabs" data-default-tab="overview-status">
+            <button class="tab active" data-tab="overview-status">Status</button>
+            <button class="tab" data-tab="overview-trends">Trends</button>
+          </div>
+          <div class="tab-panels">
+            <div class="tab-panel stack" data-tab="overview-status">
+              <div class="card" id="setupBanner" hidden>
+                <h3>Finish setup <span class="help" title="Complete setup to configure your project and I/O." aria-label="Finish setup help">?</span></h3>
+                <div class="note">Finish setup to name your PLC and map I/O.</div>
+                <div class="actions" style="margin-top:10px;">
+                  <button class="btn primary" onclick="openSetup()">Open setup</button>
+                  <button class="btn ghost" onclick="dismissSetupBanner()">Dismiss</button>
+                </div>
+              </div>
+              <div class="grid two">
+                <div class="card" id="healthCard">
+                  <h3>Health <span class="help" title="Overall runtime status, faults, and I/O health at a glance." aria-label="Health help">?</span></h3>
+                  <div id="health" class="list"></div>
+                  <div class="note muted">CPU/memory shown when supported; otherwise n/a.</div>
+                  <div class="health-score" id="healthScore">Health score: --</div>
+                  <div class="actions" style="margin-top:10px;">
+                    <button class="btn secondary" id="healthCheck" onclick="runHealthCheck()">Run health check</button>
+                  </div>
+                  <div class="status" id="healthStatus" aria-live="polite" hidden></div>
+                </div>
+                <div class="card">
+                  <h3>Cycle <span class="help" title="Cycle timing metrics for the main PLC loop." aria-label="Cycle help">?</span></h3>
+                  <div id="metrics" class="list"></div>
+                </div>
+              </div>
+              <div class="grid three">
+                <div class="card" id="tasksCard">
+                  <h3>Tasks <span class="help" title="Configured PLC tasks and their execution times." aria-label="Tasks help">?</span></h3>
+                  <div id="tasks" class="table"></div>
+                </div>
+                <div class="card">
+                  <h3>Controls <span class="help" title="Pause, restart, or shut down the PLC." aria-label="Controls help">?</span></h3>
+                  <div class="actions" style="margin-bottom:10px;">
+                    <button class="btn ghost" onclick="sendControl('restart', {mode:'warm'})">Restart warm</button>
+                    <button class="btn ghost" onclick="confirmRestartCold()">Restart cold</button>
+                  </div>
+                  <button class="btn danger" onclick="confirmShutdown()">Shutdown</button>
+                  <div class="note">Use restart for normal updates. Shutdown is for maintenance.</div>
+                  <div class="note muted" id="debugHint" hidden></div>
+                </div>
+                <div class="card">
+                  <h3>Recent events <span class="help" title="Latest runtime events (task start/end, cycle start/end)." aria-label="Recent events help">?</span></h3>
+                  <div id="eventsSummary" class="list"></div>
+                </div>
+              </div>
+            </div>
+            <div class="tab-panel" data-tab="overview-trends" hidden>
+              <div class="card">
+                <h3>Trends <span class="help" title="Cycle time and variable trends over time." aria-label="Trends help">?</span></h3>
+                <div class="trend-controls">
+                  <div class="actions">
+                    <button class="btn ghost active" data-trend="60000" onclick="setTrendWindow(60000)">1m</button>
+                    <button class="btn ghost" data-trend="300000" onclick="setTrendWindow(300000)">5m</button>
+                    <button class="btn ghost" data-trend="900000" onclick="setTrendWindow(900000)">15m</button>
+                    <button class="btn ghost" data-trend="3600000" onclick="setTrendWindow(3600000)">1h</button>
+                  </div>
+                  <div class="field" style="margin:0;">
+                    <label class="muted">Variable trend <span class="help" title="Select a watched variable to plot." aria-label="Variable trend help">?</span></label>
+                    <select id="trendVariable"><option value="">cycle only</option></select>
+                  </div>
+                </div>
+                <div class="grid two" style="margin-top:12px;">
+                  <div>
+                    <div class="muted">Cycle time (ms)</div>
+                  <canvas id="cycleTrend" width="520" height="160" data-unit="ms"></canvas>
+                  </div>
+                  <div>
+                    <div class="muted">Watched variable</div>
+                  <canvas id="varTrend" width="520" height="160"></canvas>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="page" data-page="io" hidden>
+          <div class="tabs" data-default-tab="io-live">
+            <button class="tab active" data-tab="io-live">Live</button>
+            <button class="tab" data-tab="io-config">Configure</button>
+          </div>
+          <div class="tab-panels">
+            <div class="tab-panel stack" data-tab="io-live">
+              <div class="grid two">
+                <div class="card">
+                  <h3>Inputs <span class="help" title="Live input values read from your I/O driver." aria-label="Inputs help">?</span></h3>
+                  <div id="ioInputs" class="list"></div>
+                </div>
+                <div class="card">
+                  <h3>Outputs <span class="help" title="Live output values written by your PLC program." aria-label="Outputs help">?</span></h3>
+                  <div id="ioOutputs" class="list"></div>
+                </div>
+              </div>
+              <div class="card" id="simPanel" hidden>
+                <h3>Simulation (loopback) <span class="help" title="Simulated inputs for testing without hardware." aria-label="Simulation help">?</span></h3>
+                <div class="note">Toggle inputs to test program behavior without hardware.</div>
+                <div id="simInputs" class="list"></div>
+              </div>
+              <div class="card">
+                <h3>Driver health <span class="help" title="Status of configured I/O drivers." aria-label="Driver health help">?</span></h3>
+                <div id="ioDrivers" class="list"></div>
+              </div>
+            </div>
+            <div class="tab-panel" data-tab="io-config" hidden>
+              <div class="card" id="ioConfig">
+                <h3>I/O configuration <span class="help" title="Configure drivers, mappings, and safe states without editing files." aria-label="I/O configuration help">?</span></h3>
+                <div class="note">Changes are saved to io.toml. Restart required to apply.</div>
+                <div class="field" style="margin-top:12px;">
+                  <label class="muted">Driver <span class="help" title="Select the hardware driver used for I/O." aria-label="Driver selection help">?</span></label>
+                  <select id="ioDriverSelect">
+                    <option value="gpio">gpio</option>
+                    <option value="modbus-tcp">modbus-tcp</option>
+                    <option value="loopback">loopback</option>
+                    <option value="simulated">simulated</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label class="muted">Use system I/O config <span class="help" title="Use /etc/trust/io.toml instead of project io.toml." aria-label="Use system I/O help">?</span></label>
+                  <select id="ioUseSystem"><option value="false">false</option><option value="true">true</option></select>
+                </div>
+
+                <div id="ioDriverModbus" hidden>
+                  <div class="grid two">
+                    <div class="field">
+                      <label class="muted">Server address <span class="help" title="IP or hostname of the Modbus device." aria-label="Modbus address help">?</span></label>
+                      <input id="modbusAddress" type="text" placeholder="192.168.0.10"/>
+                    </div>
+                    <div class="field">
+                      <label class="muted">Port <span class="help" title="Default Modbus/TCP port is 502." aria-label="Modbus port help">?</span></label>
+                      <input id="modbusPort" type="number" min="1" max="65535" placeholder="502"/>
+                    </div>
+                    <div class="field">
+                      <label class="muted">Unit ID <span class="help" title="Modbus unit/slave id (typically 1)." aria-label="Modbus unit help">?</span></label>
+                      <input id="modbusUnitId" type="number" min="0" max="255" placeholder="1"/>
+                    </div>
+                    <div class="field">
+                      <label class="muted">Timeout (ms) <span class="help" title="How long to wait for a Modbus response." aria-label="Modbus timeout help">?</span></label>
+                      <input id="modbusTimeout" type="number" min="50" placeholder="500"/>
+                    </div>
+                    <div class="field">
+                      <label class="muted">Input start <span class="help" title="Starting input register address." aria-label="Modbus input start help">?</span></label>
+                      <input id="modbusInputStart" type="number" min="0" placeholder="0"/>
+                    </div>
+                    <div class="field">
+                      <label class="muted">Output start <span class="help" title="Starting output register address." aria-label="Modbus output start help">?</span></label>
+                      <input id="modbusOutputStart" type="number" min="0" placeholder="0"/>
+                    </div>
+                    <div class="field">
+                      <label class="muted">On error <span class="help" title="How the PLC reacts to Modbus errors." aria-label="Modbus error policy help">?</span></label>
+                      <select id="modbusOnError">
+                        <option value="fault">fault</option>
+                        <option value="warn">warn</option>
+                        <option value="ignore">ignore</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="actions" style="margin-top:10px;">
+                    <button class="btn secondary" id="modbusTest" onclick="testModbus()">Test connection</button>
+                    <div class="status" id="modbusStatus" aria-live="polite" hidden></div>
+                  </div>
+                  <div class="note" id="modbusGuide">Step 1: enter address + unit ID. Step 2: test connection. Step 3: save I/O config.</div>
+                </div>
+
+                <div id="ioDriverGpio" hidden>
+                  <div class="field">
+                    <label class="muted">Backend <span class="help" title="GPIO backend (sysfs or libgpiod if supported)." aria-label="GPIO backend help">?</span></label>
+                    <input id="gpioBackend" type="text" placeholder="sysfs"/>
+                  </div>
+                  <div class="grid two">
+                    <div class="card" style="padding:12px;">
+                      <h4>Inputs</h4>
+                      <div id="gpioInputs" class="table"></div>
+                      <button class="btn ghost" onclick="addGpioInput()">+ Add input</button>
+                    </div>
+                    <div class="card" style="padding:12px;">
+                      <h4>Outputs</h4>
+                      <div id="gpioOutputs" class="table"></div>
+                      <button class="btn ghost" onclick="addGpioOutput()">+ Add output</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="field" style="margin-top:12px;">
+                  <label class="muted">Safe‑state outputs <span class="help" title="Outputs to drive when a fault or watchdog triggers." aria-label="Safe state help">?</span></label>
+                  <div id="ioSafeState" class="table"></div>
+                  <button class="btn ghost" onclick="addSafeState()">+ Add safe state</button>
+                </div>
+                <button class="btn primary" id="ioConfigApply" onclick="saveIoConfig()">Save I/O config</button>
+                <div class="status" id="ioConfigStatus" aria-live="polite" hidden></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="page" data-page="logs" hidden>
+          <div class="tabs" data-default-tab="logs-active">
+            <button class="tab active" data-tab="logs-active">Active</button>
+            <button class="tab" data-tab="logs-history">History</button>
+          </div>
+          <div class="tab-panels">
+            <div class="tab-panel" data-tab="logs-active">
+              <div class="grid two">
+                <div class="card">
+                  <h3>Faults <span class="help" title="Active faults or warnings affecting the PLC." aria-label="Faults help">?</span></h3>
+                  <div id="faults" class="list"></div>
+                </div>
+                <div class="card">
+                  <h3>Events <span class="help" title="Recent runtime events for troubleshooting." aria-label="Events help">?</span></h3>
+                  <div id="events" class="list"></div>
+                </div>
+              </div>
+            </div>
+            <div class="tab-panel" data-tab="logs-history" hidden>
+              <div class="card">
+                <h3>Event history <span class="help" title="Filter, search, and export recent events." aria-label="Event history help">?</span></h3>
+                <div class="actions" style="margin-bottom:10px;">
+                  <select id="eventFilterType">
+                    <option value="all">all types</option>
+                    <option value="fault">faults</option>
+                    <option value="warn">warnings</option>
+                    <option value="info">info</option>
+                  </select>
+                  <select id="eventFilterWindow">
+                    <option value="all">all time</option>
+                    <option value="1h">last hour</option>
+                    <option value="24h">last 24h</option>
+                    <option value="7d">last 7d</option>
+                  </select>
+                  <input id="eventSearch" type="text" placeholder="Search events"/>
+                  <button class="btn ghost" onclick="exportEventCsv()">Export CSV</button>
+                </div>
+                <div id="eventHistory" class="list"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="page" data-page="program" hidden>
+          <div class="tabs" data-default-tab="program-view">
+            <button class="tab active" data-tab="program-view">Program</button>
+            <button class="tab" data-tab="program-watch">Watch</button>
+          </div>
+          <div class="tab-panels">
+            <div class="tab-panel" data-tab="program-view">
+              <div class="grid two">
+                <div class="card">
+                  <h3>Loaded program <span class="help" title="Program and sources currently running." aria-label="Program help">?</span></h3>
+                  <div id="programMeta" class="list"></div>
+                  <div class="field" style="margin-top:12px;">
+                    <label class="muted">Sources</label>
+                    <div id="sourceList" class="list"></div>
+                  </div>
+                </div>
+                <div class="card">
+                  <h3>Source viewer <span class="help" title="Read‑only view of the loaded source file." aria-label="Source viewer help">?</span></h3>
+                  <pre id="sourceViewer" class="code"></pre>
+                </div>
+              </div>
+            </div>
+            <div class="tab-panel" data-tab="program-watch" hidden>
+              <div class="card">
+                <h3>Variable watch <span class="help" title="Monitor and force global/RETAIN variables (debug mode required)." aria-label="Variable watch help">?</span></h3>
+                <div class="note">Add a variable name, then optionally force a value. Debug mode must be enabled.</div>
+                <div class="field">
+                  <label class="muted">Find variable <span class="help" title="Type a variable name and add it to the watch list." aria-label="Find variable help">?</span></label>
+                  <div class="actions">
+                    <input id="watchSearch" type="text" placeholder="Counter"/>
+                    <button class="btn secondary" onclick="addWatchFromSearch()">Add watch</button>
+                  </div>
+                </div>
+                <div id="watchList" class="table"></div>
+                <div class="actions" style="margin-top:10px;">
+                  <button class="btn ghost" onclick="addWatch()">+ Add watch</button>
+                  <button class="btn ghost" onclick="releaseAllForces()">Release all</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="page" data-page="deploy" hidden>
+          <div class="tab-panels">
+            <div class="tab-panel">
+              <div class="grid two">
+                <div class="card">
+                  <h3>Deploy project files <span class="help" title="Upload PLC configuration and program artifacts." aria-label="Deploy help">?</span></h3>
+                  <div class="note">Upload runtime.toml, io.toml, program.stbc, and sources.</div>
+                  <div class="field">
+                    <label class="muted">runtime.toml <span class="help" title="Runtime settings (cycle time, watchdog, network)." aria-label="runtime.toml help">?</span></label>
+                    <input id="deployRuntime" type="file" accept=".toml"/>
+                  </div>
+                  <div class="field">
+                    <label class="muted">io.toml <span class="help" title="I/O mappings for your driver." aria-label="io.toml help">?</span></label>
+                    <input id="deployIo" type="file" accept=".toml"/>
+                  </div>
+                  <div class="field">
+                    <label class="muted">program.stbc <span class="help" title="Compiled PLC bytecode generated from your sources." aria-label="program.stbc help">?</span></label>
+                    <input id="deployProgram" type="file" accept=".stbc"/>
+                  </div>
+                  <div class="field">
+                    <label class="muted">sources (.st) <span class="help" title="Structured Text sources for your PLC." aria-label="sources help">?</span></label>
+                    <input id="deploySources" type="file" accept=".st" multiple/>
+                  </div>
+                  <div class="field">
+                    <label class="muted">Restart after deploy <span class="help" title="Choose when changes take effect: no restart keeps the current runtime running; warm applies changes and keeps RETAIN; cold applies changes and clears RETAIN." aria-label="Restart after deploy help">?</span></label>
+                    <select id="deployRestart">
+                      <option value="">no restart</option>
+                      <option value="warm">warm</option>
+                      <option value="cold">cold</option>
+                    </select>
+                  </div>
+                  <button class="btn primary" id="deployButton" onclick="deployBundle()">Deploy</button>
+                  <div class="status" id="deployStatus" aria-live="polite" hidden></div>
+                </div>
+                <div class="card">
+                  <h3>Deployment history <span class="help" title="Recent deployments and quick rollback." aria-label="Deployment history help">?</span></h3>
+                  <div class="note" id="deployLast">Last deploy: --</div>
+                  <div id="deployHistory" class="list"></div>
+                  <div class="actions" style="margin-top:12px;">
+                    <button class="btn ghost" onclick="clearDeployHistory()">Clear history</button>
+                    <button class="btn danger" id="rollbackButton" onclick="confirmRollback()">Rollback to previous</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="page" data-page="settings" hidden>
+          <div class="tabs" data-default-tab="settings-runtime">
+            <button class="tab active" data-tab="settings-runtime">Runtime</button>
+            <button class="tab" data-tab="settings-network">Network</button>
+            <button class="tab" data-tab="settings-mesh">Mesh</button>
+            <button class="tab" data-tab="settings-setup">Setup</button>
+          </div>
+          <div class="tab-panels">
+            <div class="tab-panel" data-tab="settings-runtime">
+              <div class="card">
+                <h3>Runtime settings <span class="help" title="Live settings applied to the running PLC." aria-label="Runtime settings help">?</span></h3>
+                <div class="field">
+                  <label class="muted">Log level <span class="help" title="Controls how much detail the runtime logs. Higher levels include lower levels. Shown in Logs and system/terminal logs." aria-label="Log level help">?</span></label>
+                  <select id="logLevel">
+                    <option>error</option><option>warn</option><option>info</option><option>debug</option><option>trace</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label class="muted">Watchdog enabled <span class="help" title="Stops outputs if the PLC stops responding." aria-label="Watchdog enabled help">?</span></label>
+                  <select id="watchdogEnabled"><option value="true">true</option><option value="false">false</option></select>
+                </div>
+                <div class="field">
+                  <label class="muted">Watchdog timeout (ms) <span class="help" title="Time before watchdog trips if no heartbeat." aria-label="Watchdog timeout help">?</span></label>
+                  <input id="watchdogTimeout" type="number" min="0"/>
+                </div>
+                <div class="field">
+                  <label class="muted">Watchdog action <span class="help" title="What happens when the watchdog trips." aria-label="Watchdog action help">?</span></label>
+                  <select id="watchdogAction">
+                    <option value="halt">halt</option>
+                    <option value="safe_halt">safe_halt</option>
+                    <option value="restart">restart</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label class="muted">Fault policy <span class="help" title="How faults are handled by the runtime." aria-label="Fault policy help">?</span></label>
+                  <select id="faultPolicy">
+                    <option value="halt">halt</option>
+                    <option value="warn">warn</option>
+                    <option value="ignore">ignore</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label class="muted">Retain mode <span class="help" title="Whether RETAIN variables persist across restarts." aria-label="Retain mode help">?</span></label>
+                  <select id="retainMode">
+                    <option value="none">none</option>
+                    <option value="file">file</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label class="muted">Retain save interval (ms) <span class="help" title="How often RETAIN values are saved to disk." aria-label="Retain save interval help">?</span></label>
+                  <input id="retainSaveInterval" type="number" min="0"/>
+                </div>
+                <div class="field">
+                  <label class="muted">Control mode <span class="help" title="Production locks debug features; debug enables stepping." aria-label="Control mode help">?</span></label>
+                  <select id="controlMode">
+                    <option value="production">production</option>
+                    <option value="debug">debug</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label class="muted">Debug enabled <span class="help" title="Allow pause/step commands from the UI." aria-label="Debug enabled help">?</span></label>
+                  <select id="debugEnabled"><option value="true">true</option><option value="false">false</option></select>
+                </div>
+                <button class="btn primary" id="settingsApply" onclick="applySettings()">Apply changes</button>
+                <div class="status" id="settingsNote" aria-live="polite" hidden></div>
+              </div>
+            </div>
+            <div class="tab-panel" data-tab="settings-network" hidden>
+              <div class="grid two">
+                <div class="card">
+                  <h3>Web access <span class="help" title="Configure the embedded web server." aria-label="Web access help">?</span></h3>
+                  <div class="field">
+                    <label class="muted">Web enabled <span class="help" title="Enable or disable the web UI." aria-label="Web enabled help">?</span></label>
+                    <select id="webEnabled"><option value="true">true</option><option value="false">false</option></select>
+                  </div>
+                  <div class="field">
+                    <label class="muted">Web listen <span class="help" title="Address and port for the web UI." aria-label="Web listen help">?</span></label>
+                    <input id="webListen" type="text" placeholder="0.0.0.0:8080"/>
+                  </div>
+                  <div class="field">
+                    <label class="muted">Web auth <span class="help" title="local or token (token requires control auth token)." aria-label="Web auth help">?</span></label>
+                    <select id="webAuth"><option value="local">local</option><option value="token">token</option></select>
+                  </div>
+                </div>
+                <div class="card">
+                  <h3>Discovery <span class="help" title="LAN discovery settings for PLCs." aria-label="Discovery settings help">?</span></h3>
+                  <div class="field">
+                    <label class="muted">Discovery enabled <span class="help" title="Enable mDNS discovery on the LAN." aria-label="Discovery enabled help">?</span></label>
+                    <select id="discoveryEnabled"><option value="true">true</option><option value="false">false</option></select>
+                  </div>
+                  <div class="field">
+                    <label class="muted">Service name <span class="help" title="Name advertised via discovery." aria-label="Discovery service name help">?</span></label>
+                    <input id="discoveryServiceName" type="text" placeholder="truST"/>
+                  </div>
+                  <div class="field">
+                    <label class="muted">Advertise <span class="help" title="Advertise this PLC on the network." aria-label="Discovery advertise help">?</span></label>
+                    <select id="discoveryAdvertise"><option value="true">true</option><option value="false">false</option></select>
+                  </div>
+                  <div class="field">
+                    <label class="muted">Interfaces <span class="help" title="Comma‑separated interfaces (e.g. eth0,wlan0)." aria-label="Discovery interfaces help">?</span></label>
+                    <input id="discoveryInterfaces" type="text" placeholder="eth0,wlan0"/>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="tab-panel" data-tab="settings-mesh" hidden>
+              <div class="card">
+                <h3>Mesh data sharing <span class="help" title="Publish and subscribe variables between PLCs." aria-label="Mesh settings help">?</span></h3>
+                <div class="grid two">
+                  <div class="field">
+                    <label class="muted">Mesh enabled <span class="help" title="Enable runtime‑to‑runtime data sharing." aria-label="Mesh enabled help">?</span></label>
+                    <select id="meshEnabled"><option value="true">true</option><option value="false">false</option></select>
+                  </div>
+                  <div class="field">
+                    <label class="muted">Listen address <span class="help" title="Port for mesh connections (e.g. 0.0.0.0:5200)." aria-label="Mesh listen help">?</span></label>
+                    <input id="meshListen" type="text" placeholder="0.0.0.0:5200"/>
+                  </div>
+                  <div class="field">
+                    <label class="muted">Auth token <span class="help" title="Shared token for mesh connections. Leave blank to keep current." aria-label="Mesh auth token help">?</span></label>
+                    <input id="meshAuthToken" type="password" placeholder="leave blank to keep"/>
+                  </div>
+                </div>
+                <div class="grid two" style="margin-top:10px;">
+                  <div class="card" style="padding:12px;">
+                    <h4>Publish</h4>
+                    <div id="meshPublishList" class="table"></div>
+                    <button class="btn ghost" onclick="addMeshPublish()">+ Add publish</button>
+                  </div>
+                  <div class="card" style="padding:12px;">
+                    <h4>Subscribe</h4>
+                    <div id="meshSubscribeList" class="table"></div>
+                    <button class="btn ghost" onclick="addMeshSubscribe()">+ Add subscription</button>
+                  </div>
+                </div>
+                <div class="field" style="margin-top:12px;">
+                  <label class="muted">Quick subscribe <span class="help" title="Fast path: enter PLC:Variable and choose a local name." aria-label="Quick subscribe help">?</span></label>
+                  <div class="grid two">
+                    <input id="meshQuickRemote" type="text" placeholder="PLC-1:TempA"/>
+                    <input id="meshQuickLocal" type="text" placeholder="RemoteTemp"/>
+                  </div>
+                  <button class="btn secondary" style="margin-top:8px;" onclick="addMeshQuick()">Add subscription</button>
+                </div>
+              </div>
+            </div>
+            <div class="tab-panel" data-tab="settings-setup" hidden>
+              <div class="card" id="setupWizard">
+                <h3>Setup wizard <span class="help" title="Configure the project folder, PLC name, and I/O driver." aria-label="Setup wizard help">?</span></h3>
+                <div class="muted">Update PLC name, cycle time, and I/O mapping.</div>
+                <div class="field" style="margin-top:12px;">
+                  <label class="muted">Project folder <span class="help" title="Where runtime.toml, io.toml, sources/, and program.stbc live." aria-label="Project folder help">?</span></label>
+                  <input id="setupProjectPath" type="text"/>
+                </div>
+                <div class="field">
+                  <label class="muted">PLC name <span class="help" title="Shown in the UI and network discovery." aria-label="PLC name help">?</span></label>
+                  <input id="setupPlcName" type="text"/>
+                </div>
+                <div class="field">
+                  <label class="muted">Cycle time (ms) <span class="help" title="How often the PLC task runs (typical 10–100 ms)." aria-label="Cycle time help">?</span></label>
+                  <input id="setupCycle" type="number" min="1"/>
+                </div>
+                <div class="field">
+                  <label class="muted">I/O driver <span class="help" title="Auto selects gpio on Raspberry Pi or loopback for simulation." aria-label="Driver help">?</span></label>
+                  <select id="setupDriver">
+                    <option value="auto">auto</option>
+                    <option value="loopback">loopback</option>
+                    <option value="gpio">gpio</option>
+                    <option value="modbus-tcp">modbus-tcp</option>
+                    <option value="simulated">simulated</option>
+                  </select>
+                </div>
+                <button class="btn ghost" id="toggleAdvanced" onclick="toggleAdvancedSettings()">Show advanced</button>
+                <div id="advancedSettings" hidden>
+                  <div class="field">
+                    <label class="muted">Use system I/O config <span class="help" title="Use /etc/trust/io.toml instead of a project file." aria-label="System I/O help">?</span></label>
+                    <select id="setupUseSystem"><option value="true">true</option><option value="false">false</option></select>
+                  </div>
+                  <div class="field">
+                    <label class="muted">Write system I/O config <span class="help" title="Create or update the device-wide I/O configuration." aria-label="Write system I/O help">?</span></label>
+                    <select id="setupWriteSystem"><option value="true">true</option><option value="false">false</option></select>
+                  </div>
+                  <div class="field">
+                    <label class="muted">Overwrite system I/O config <span class="help" title="Only needed if /etc/trust/io.toml already exists." aria-label="Overwrite system I/O help">?</span></label>
+                    <select id="setupOverwriteSystem"><option value="false">false</option><option value="true">true</option></select>
+                  </div>
+                </div>
+                <button class="btn primary" id="setupApply" onclick="applySetup()">Apply setup</button>
+                <div class="status" id="setupNote" aria-live="polite" hidden></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="page" data-page="network" hidden>
+          <div class="tabs" data-default-tab="network-topology">
+            <button class="tab active" data-tab="network-topology">Topology</button>
+            <button class="tab" data-tab="network-discovery">Discovery</button>
+            <button class="tab" data-tab="network-pairing">Pairing</button>
+          </div>
+          <div class="tab-panels">
+            <div class="tab-panel stack" data-tab="network-topology">
+              <div class="card">
+                <h3>Network topology <span class="help" title="Overview of nearby PLCs and connections." aria-label="Network topology help">?</span></h3>
+                <div class="actions" style="margin-bottom:10px;">
+                  <button class="btn secondary" id="refreshDiscoveryBtn" onclick="refreshDiscoveryWithFeedback()">Refresh discovery</button>
+                  <button class="btn ghost" onclick="scrollToManual()">Add connection</button>
+                </div>
+                <div class="note" id="connectionCount">Active connections: --</div>
+                <div id="topology" class="list"></div>
+              </div>
+              <div class="card">
+                <h3>Mesh connections <span class="help" title="Configured data sharing links and their status." aria-label="Mesh connections help">?</span></h3>
+                <div id="meshConnections" class="list"></div>
+              </div>
+            </div>
+            <div class="tab-panel" data-tab="network-discovery" hidden>
+              <div class="card">
+                <h3>Discovery <span class="help" title="Find PLCs on the local network." aria-label="Discovery help">?</span></h3>
+                <div class="muted">Local PLCs on this network.</div>
+                <div id="discovery" class="list"></div>
+                <div class="field" style="margin-top:12px;">
+                  <label class="muted">Manual add <span class="help" title="Add a PLC by URL if discovery is unavailable." aria-label="Manual add help">?</span></label>
+                  <input id="manualEndpoint" placeholder="http://host:port"/>
+                </div>
+                <button class="btn secondary" onclick="addManual()">Add PLC</button>
+              </div>
+            </div>
+            <div class="tab-panel" data-tab="network-pairing" hidden>
+              <div class="card">
+                <h3>Pairing <span class="help" title="Pair another device to access this PLC." aria-label="Pairing help">?</span></h3>
+                <div class="muted">Pair code <span class="help" title="Share this code to grant access from another device." aria-label="Pair code help">?</span></div>
+                <div id="pairCode" class="tag">none</div>
+                <img id="pairQr" class="qr" alt="Pairing QR code" hidden/>
+                <div id="pairQrPlaceholder" class="qr-placeholder" hidden>Generate a code to show QR</div>
+                <button class="btn secondary" id="pairStart" style="margin-top:10px;" onclick="startPairing()">Generate code</button>
+                <div class="field" style="margin-top:12px;">
+                  <label class="muted">Claim code <span class="help" title="Enter a code generated on another device." aria-label="Claim code help">?</span></label>
+                  <input id="pairClaim" placeholder="Enter code"/>
+                </div>
+                <button class="btn primary" id="pairClaimButton" onclick="claimPairing()">Claim</button>
+                <div class="status" id="pairStatus" aria-live="polite" hidden></div>
+                <div class="field" style="margin-top:16px;">
+                  <label class="muted">Invite <span class="help" title="Share a link or QR to pair another device." aria-label="Invite help">?</span></label>
+                  <button class="btn ghost" onclick="showInvite()">Copy invite</button>
+                </div>
+                <img id="inviteQr" class="qr" alt="Invite QR code" hidden/>
+                <div id="inviteQrPlaceholder" class="qr-placeholder" hidden>Set a control auth token to enable invite QR</div>
+                <div class="note">Use pairing to grant access from another device.</div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <div class="overlay" id="onboarding" role="dialog" aria-modal="true" hidden>
+    <div class="overlay-card">
+      <div class="eyebrow">Getting started</div>
+      <h2 id="tourTitle">Welcome to truST</h2>
+      <p id="tourBody">Let’s set up your PLC in a few steps.</p>
+      <div class="tour-progress" id="tourProgress">Step 1 of 3</div>
+      <div class="actions" style="margin-top:16px;">
+        <button class="btn ghost" id="tourBack" onclick="prevTour()">Back</button>
+        <button class="btn primary" id="tourNext" onclick="nextTour()">Next</button>
+        <button class="btn ghost" onclick="closeTour()">Skip</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="overlay" id="commandPalette" role="dialog" aria-modal="true" hidden>
+    <div class="overlay-card">
+      <div class="overlay-header">
+        <div class="eyebrow">Command palette</div>
+        <button class="btn ghost" id="paletteClose" aria-label="Close command palette" onclick="closePalette()">Close</button>
+      </div>
+      <input id="paletteInput" placeholder="Type a command"/>
+      <div id="paletteList" class="list" style="margin-top:12px;"></div>
+      <div class="note">Press Esc to close</div>
+    </div>
+  </div>
+
+  <div class="overlay" id="shortcutsOverlay" role="dialog" aria-modal="true" hidden>
+    <div class="overlay-card">
+      <div class="overlay-header">
+        <div class="eyebrow">Keyboard shortcuts</div>
+        <button class="btn ghost" id="shortcutsClose" aria-label="Close shortcuts" onclick="closeShortcuts()">Close</button>
+      </div>
+      <div class="list">
+        <div class="row"><span>Open command palette</span><span class="tag">Ctrl + K</span></div>
+        <div class="row"><span>Open shortcuts</span><span class="tag">?</span></div>
+        <div class="row"><span>Close dialogs</span><span class="tag">Esc</span></div>
+      </div>
+      <div class="note">Shortcuts work when focus is not in a text field.</div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

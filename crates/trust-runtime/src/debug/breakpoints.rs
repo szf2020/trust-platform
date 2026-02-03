@@ -1,0 +1,123 @@
+//! Breakpoint and logpoint evaluation.
+
+#![allow(missing_docs)]
+
+use std::sync::mpsc::Sender;
+
+use crate::eval::{eval_expr, EvalContext};
+use crate::value::Value;
+
+use super::{DebugBreakpoint, DebugLog, LogFragment, SourceLocation};
+
+pub(crate) fn matches_breakpoint(
+    breakpoints: &mut [DebugBreakpoint],
+    logs: &mut Vec<DebugLog>,
+    log_tx: Option<&Sender<DebugLog>>,
+    location: &SourceLocation,
+    ctx: &mut Option<&mut EvalContext<'_>>,
+) -> Option<u64> {
+    for breakpoint in breakpoints.iter_mut() {
+        let bp_location = &breakpoint.location;
+        if bp_location.file_id != location.file_id {
+            continue;
+        }
+        if location.start != bp_location.start || location.end != bp_location.end {
+            continue;
+        }
+        breakpoint.hits = breakpoint.hits.saturating_add(1);
+        if let Some(hit_condition) = breakpoint.hit_condition {
+            if !hit_condition.is_met(breakpoint.hits) {
+                continue;
+            }
+        }
+        if let Some(condition) = &breakpoint.condition {
+            let Some(eval_ctx) = ctx.as_deref_mut() else {
+                continue;
+            };
+            if !condition_matches(eval_ctx, condition) {
+                continue;
+            }
+        }
+        if let Some(message) = &breakpoint.log_message {
+            if let Some(eval_ctx) = ctx.as_deref_mut() {
+                let formatted = format_log_message(eval_ctx, message);
+                let log = DebugLog {
+                    message: formatted,
+                    location: Some(*location),
+                };
+                if let Some(sender) = log_tx {
+                    let _ = sender.send(log);
+                } else {
+                    logs.push(log);
+                }
+            }
+            continue;
+        }
+        return Some(breakpoint.generation);
+    }
+    None
+}
+
+fn condition_matches(ctx: &mut EvalContext<'_>, condition: &crate::eval::expr::Expr) -> bool {
+    match eval_expr(ctx, condition) {
+        Ok(Value::Bool(true)) => true,
+        Ok(Value::Bool(false)) => false,
+        Ok(_) => false,
+        Err(_) => false,
+    }
+}
+
+fn format_log_message(ctx: &mut EvalContext<'_>, fragments: &[LogFragment]) -> String {
+    let mut output = String::new();
+    for fragment in fragments {
+        match fragment {
+            LogFragment::Text(text) => output.push_str(text),
+            LogFragment::Expr(expr) => match eval_expr(ctx, expr) {
+                Ok(value) => output.push_str(&format_log_value(&value)),
+                Err(err) => output.push_str(&format!("<error: {err}>")),
+            },
+        }
+    }
+    output
+}
+
+fn format_log_value(value: &Value) -> String {
+    match value {
+        Value::Bool(value) => {
+            if *value {
+                "TRUE".to_string()
+            } else {
+                "FALSE".to_string()
+            }
+        }
+        Value::String(value) => value.to_string(),
+        Value::WString(value) => value.clone(),
+        Value::Char(value) => (*value as char).to_string(),
+        Value::WChar(value) => char::from_u32((*value).into()).unwrap_or('?').to_string(),
+        Value::Array(value) => format!("[{}]", value.elements.len()),
+        Value::Struct(value) => format!("{} {{...}}", value.type_name),
+        Value::Enum(value) => format!("{}::{}", value.type_name, value.variant_name),
+        Value::Reference(Some(_)) => "REF".to_string(),
+        Value::Reference(None) => "NULL_REF".to_string(),
+        Value::Instance(value) => format!("Instance({})", value.0),
+        Value::Null => "NULL".to_string(),
+        _ => format!("{value:?}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn breakpoints_require_exact_location_match() {
+        let outer = SourceLocation::new(0, 0, 20);
+        let inner = SourceLocation::new(0, 5, 10);
+        let mut breakpoints = vec![DebugBreakpoint::new(inner)];
+        let mut logs = Vec::new();
+        let mut ctx = None;
+
+        assert!(matches_breakpoint(&mut breakpoints, &mut logs, None, &outer, &mut ctx).is_none());
+        assert!(matches_breakpoint(&mut breakpoints, &mut logs, None, &inner, &mut ctx).is_some());
+    }
+}

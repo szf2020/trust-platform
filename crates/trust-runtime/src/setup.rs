@@ -1,0 +1,140 @@
+//! System setup helpers (writes system IO configuration).
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use smol_str::SmolStr;
+
+use crate::config::{system_io_config_path, IoConfig};
+use crate::error::RuntimeError;
+
+/// Options for `trust-runtime setup`.
+#[derive(Debug, Clone)]
+pub struct SetupOptions {
+    /// Optional driver override (default is auto-detect).
+    pub driver: Option<SmolStr>,
+    /// Optional backend override (e.g., sysfs).
+    pub backend: Option<SmolStr>,
+    /// Overwrite existing system config.
+    pub force: bool,
+    /// Optional config output path override.
+    pub path: Option<PathBuf>,
+}
+
+/// Run system setup and write the system IO config.
+pub fn run_setup(options: SetupOptions) -> Result<PathBuf, RuntimeError> {
+    let path = options.path.unwrap_or_else(system_io_config_path);
+    if path.exists() && !options.force {
+        return Err(RuntimeError::InvalidConfig(
+            format!(
+                "system io config already exists at {} (use --force to overwrite)",
+                path.display()
+            )
+            .into(),
+        ));
+    }
+
+    let (driver, params) = match options.driver.as_deref() {
+        Some(driver) => (
+            driver.to_string(),
+            build_driver_params(driver, options.backend)?,
+        ),
+        None => detect_default_driver(options.backend)?,
+    };
+
+    let io_config = IoConfig {
+        driver: SmolStr::new(driver),
+        params,
+        safe_state: crate::io::IoSafeState::default(),
+    };
+
+    write_system_io_config(&path, &io_config)?;
+    Ok(path)
+}
+
+/// Best-effort Raspberry Pi detection (returns false on error).
+pub fn is_raspberry_pi_hint() -> bool {
+    is_raspberry_pi().unwrap_or(false)
+}
+
+fn detect_default_driver(backend: Option<SmolStr>) -> Result<(String, toml::Value), RuntimeError> {
+    if is_raspberry_pi()? {
+        let params = build_gpio_params(backend)?;
+        return Ok(("gpio".to_string(), params));
+    }
+    Ok((
+        "loopback".to_string(),
+        toml::Value::Table(toml::map::Map::new()),
+    ))
+}
+
+fn build_driver_params(
+    driver: &str,
+    backend: Option<SmolStr>,
+) -> Result<toml::Value, RuntimeError> {
+    if driver.eq_ignore_ascii_case("gpio") {
+        return build_gpio_params(backend);
+    }
+    if !driver.eq_ignore_ascii_case("loopback") {
+        return Err(RuntimeError::InvalidConfig(
+            format!(
+                "invalid I/O driver '{driver}'. Expected: gpio or loopback. Tip: run trust-runtime wizard to reconfigure."
+            )
+            .into(),
+        ));
+    }
+    Ok(toml::Value::Table(toml::map::Map::new()))
+}
+
+fn build_gpio_params(backend: Option<SmolStr>) -> Result<toml::Value, RuntimeError> {
+    let mut params = toml::map::Map::new();
+    let backend = backend.unwrap_or_else(|| SmolStr::new("sysfs"));
+    params.insert("backend".into(), toml::Value::String(backend.to_string()));
+    params.insert("inputs".into(), toml::Value::Array(Vec::new()));
+    params.insert("outputs".into(), toml::Value::Array(Vec::new()));
+    Ok(toml::Value::Table(params))
+}
+
+fn write_system_io_config(path: &Path, config: &IoConfig) -> Result<(), RuntimeError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| {
+            RuntimeError::InvalidConfig(
+                format!("failed to create {}: {err}", parent.display()).into(),
+            )
+        })?;
+    }
+    let text = render_io_config(config)?;
+    fs::write(path, text).map_err(|err| {
+        RuntimeError::InvalidConfig(format!("failed to write {}: {err}", path.display()).into())
+    })?;
+    Ok(())
+}
+
+fn render_io_config(config: &IoConfig) -> Result<String, RuntimeError> {
+    let mut io_table = toml::map::Map::new();
+    io_table.insert(
+        "driver".into(),
+        toml::Value::String(config.driver.to_string()),
+    );
+    io_table.insert("params".into(), config.params.clone());
+    let mut root = toml::map::Map::new();
+    root.insert("io".into(), toml::Value::Table(io_table));
+    toml::to_string(&toml::Value::Table(root)).map_err(|err| {
+        RuntimeError::InvalidConfig(format!("failed to render io.toml: {err}").into())
+    })
+}
+
+fn is_raspberry_pi() -> Result<bool, RuntimeError> {
+    let candidates = [
+        "/proc/device-tree/model",
+        "/sys/firmware/devicetree/base/model",
+    ];
+    for path in candidates {
+        if let Ok(text) = fs::read_to_string(path) {
+            if text.to_ascii_lowercase().contains("raspberry pi") {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}

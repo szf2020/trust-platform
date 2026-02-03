@@ -1,0 +1,453 @@
+@startuml runtime-execution
+!theme plain
+allowmixing
+skinparam backgroundColor #FEFEFE
+skinparam componentStyle uml2
+skinparam linetype ortho
+skinparam nodesep 50
+skinparam ranksep 35
+
+title truST Runtime: Bytecode & Execution Engine
+
+' ============================================================
+' RUNTIME CORE
+' ============================================================
+package "Runtime Core" as runtimeCore #LightGreen {
+
+    class "Runtime" as runtime <<runtime/core.rs:22-44>> {
+        profile: DateTimeProfile
+        storage: VariableStorage
+        registry: TypeRegistry
+        io: IoSubsystem
+        access: AccessMap
+        stdlib: StandardLibrary
+        debug: Option<DebugControl>
+        statement_index: IndexMap
+        metrics: MetricsSubsystem
+        watchdog: WatchdogSubsystem
+        faults: FaultSubsystem
+        retain: RetainManager
+        --
+        functions: IndexMap<SmolStr, FunctionDef>
+        function_blocks: IndexMap<SmolStr, FunctionBlockDef>
+        classes: IndexMap<SmolStr, ClassDef>
+        interfaces: IndexMap<SmolStr, InterfaceDef>
+        programs: IndexMap<SmolStr, ProgramDef>
+        globals: IndexMap<SmolStr, GlobalVarMeta>
+        --
+        tasks: Vec<TaskConfig>
+        task_state: IndexMap<SmolStr, TaskState>
+        current_time: Duration
+        cycle_counter: u64
+        --
+        +new() → Runtime
+        +execute_cycle() → Result<()>
+        +apply_bytecode_metadata()
+        +apply_bytecode_module()
+    }
+}
+
+' ============================================================
+' EXECUTION CYCLE
+' ============================================================
+package "Execution Cycle" as cyclePkg #LightBlue {
+
+    rectangle "execute_cycle() (cycle.rs:18-91)" as cycleFlow #Wheat {
+        card "1. Apply debug var writes" as step1
+        card "2. Emit CycleStart event" as step2
+        card "3. read_cycle_inputs()" as step3
+        card "4. collect_ready_tasks()" as step4
+        card "5. Sort by (priority, due_at)" as step5
+        card "6. execute_task() for each" as step6
+        card "6a. watchdog check" as step6a
+        card "7. execute_background_programs()" as step7
+        card "8. write_cycle_outputs()" as step8
+        card "9. update_io_health()" as step9
+        card "10. Emit CycleEnd event" as step10
+    }
+
+    step1 --> step2
+    step2 --> step3
+    step3 --> step4
+    step4 --> step5
+    step5 --> step6
+    step6 --> step6a
+    step6a --> step7
+    step7 --> step8
+    step8 --> step9
+    step9 --> step10
+
+    note right of step4
+        TaskConfig:
+        • name: SmolStr
+        • interval: Duration
+        • priority: u8
+        • programs: Vec<SmolStr>
+    end note
+
+    note right of step3
+        read_cycle_inputs():
+        • drivers read inputs
+        • apply debug IO writes
+        • apply forced values (IO + vars)
+        • map inputs → storage
+    end note
+
+    note right of step8
+        write_cycle_outputs():
+        • map storage → outputs
+        • apply forced values (IO + vars)
+        • drivers write outputs
+    end note
+
+    note right of step9
+        update_io_health():
+        • snapshot each driver health
+        • exposed via ctl status / UI
+    end note
+
+    note right of step6
+        execute_task():
+        • emits TaskStart event
+        • runs programs + FB refs
+        • emits TaskEnd event
+        • task → DAP thread id
+    end note
+
+    note right of step6a
+        watchdog check:
+        • FaultDecision via WatchdogSubsystem
+        • apply safe state via IoSubsystem
+    end note
+}
+
+' ============================================================
+' LIFECYCLE (START/STOP)
+' ============================================================
+package "Lifecycle" as lifecyclePkg #LightGray {
+    rectangle "startup()" as startupFlow #Wheat {
+        card "1. load_retain()" as start1
+        card "2. init globals/IO" as start2
+        card "3. start tasks" as start3
+    }
+
+    rectangle "shutdown()" as shutdownFlow #Wheat {
+        card "1. stop tasks" as stop1
+        card "2. save_retain()" as stop2
+    }
+}
+
+' ============================================================
+' VARIABLE STORAGE
+' ============================================================
+package "Variable Storage" as storagePkg #LightCoral {
+
+    class "VariableStorage" as varStorage <<memory.rs:63-71>> {
+        globals: IndexMap<SmolStr, Value>
+        frames: Vec<LocalFrame>
+        instances: FxHashMap<InstanceId, InstanceData>
+        retain: IndexMap<SmolStr, Value>
+        next_frame_id: u32
+        next_instance_id: u32
+        --
+        +set_global(name, value)
+        +get_global(name) → Option<Value>
+        +push_frame(owner) → FrameId
+        +pop_frame()
+        +set_local(name, value)
+        +get_local(name) → Option<Value>
+        +create_instance(type_name) → InstanceId
+    }
+
+    class "LocalFrame" as localFrame <<memory.rs:45-52>> {
+        id: FrameId
+        owner: SmolStr
+        variables: IndexMap<SmolStr, Value>
+        return_value: Option<Value>
+        instance_id: Option<InstanceId>
+    }
+
+    class "InstanceData" as instanceData <<memory.rs:55-60>> {
+        type_name: SmolStr
+        variables: IndexMap<SmolStr, Value>
+        parent: Option<InstanceId>
+    }
+
+    enum "MemoryLocation" as memLoc <<memory.rs:11-22>> {
+        Global
+        Local(FrameId)
+        Instance(InstanceId)
+        Io(IoArea)
+        Retain
+    }
+
+    varStorage --> localFrame : frames
+    varStorage --> instanceData : instances
+    varStorage --> memLoc
+}
+
+' ============================================================
+' EVALUATION CONTEXT
+' ============================================================
+package "Evaluation Context" as evalPkg #Wheat {
+
+    class "EvalContext" as evalCtx {
+        storage: &mut VariableStorage
+        registry: &TypeRegistry
+        profile: &DateTimeProfile
+        now: Duration
+        debug: Option<&mut DebugHook>
+        call_depth: u32
+        current_instance: Option<InstanceId>
+        loop_depth: u32
+        --
+        functions: &IndexMap<...>
+        function_blocks: &IndexMap<...>
+        classes: &IndexMap<...>
+    }
+
+    note right of evalCtx
+        Created fresh for each
+        task execution, carries
+        all runtime references
+
+        DebugHook boundary:
+        statement hooks fire
+        during eval; DebugControl
+        stays outside evaluation
+    end note
+}
+
+' ============================================================
+' STATEMENT AST
+' ============================================================
+package "Statement AST" as stmtPkg #PaleGreen {
+
+    enum "Stmt" as stmtEnum <<eval/stmt.rs:30-95>> {
+        Assign { target, value, location }
+        AssignAttempt { target, value, location }
+        Expr { expr, location }
+        If { condition, then_block, else_if, else_block, location }
+        Case { selector, branches, else_block, location }
+        For { control, start, end, step, body, location }
+        While { condition, body, location }
+        Repeat { body, until, location }
+        Label { name, stmt, location }
+        Jmp { target, location }
+        Return { expr, location }
+        Exit { location }
+        Continue { location }
+    }
+
+    enum "StmtResult" as stmtResult <<eval/stmt.rs:13-20>> {
+        Continue
+        Return(Option<Value>)
+        Exit
+        LoopContinue
+        Jump(SmolStr)
+    }
+}
+
+' ============================================================
+' EXPRESSION AST
+' ============================================================
+package "Expression AST" as exprPkg #Lavender {
+
+    enum "Expr" as exprEnum <<eval/expr/ast.rs:6-36>> {
+        Literal(Value)
+        This
+        Super
+        SizeOf(SizeOfTarget)
+        Name(SmolStr)
+        Call { target, args }
+        Unary { op, expr }
+        Binary { op, left, right }
+        Index { target, indices }
+        Field { target, field }
+        Ref(LValue)
+        Deref(Box<Expr>)
+    }
+
+    enum "LValue" as lvalueEnum <<eval/expr/ast.rs:46-52>> {
+        Name(SmolStr)
+        Index { name, indices }
+        Field { name, field }
+        Deref(Box<Expr>)
+    }
+
+    enum "BinaryOp" as binOp <<eval/ops.rs:23-40>> {
+        Add, Sub, Mul, Div, Mod, Pow
+        And, Or, Xor
+        Eq, Ne, Lt, Le, Gt, Ge
+    }
+
+    enum "UnaryOp" as unOp <<eval/ops.rs:15-20>> {
+        Neg, Pos, Not
+    }
+
+    exprEnum --> lvalueEnum
+    exprEnum --> binOp
+    exprEnum --> unOp
+}
+
+' ============================================================
+' BYTECODE FORMAT
+' ============================================================
+package "Bytecode Format" as bytecodePkg #LightYellow {
+
+    class "BytecodeModule" as bcModule <<bytecode/format.rs:494-499>> {
+        version: BytecodeVersion
+        flags: u32
+        sections: Vec<Section>
+    }
+
+    class "BytecodeVersion" as bcVersion <<bytecode/format.rs:10-14>> {
+        major: u16
+        minor: u16
+    }
+
+    class "BytecodeMetadata" as bcMeta <<bytecode/format.rs:49-53>> {
+        version: BytecodeVersion
+        resources: Vec<ResourceMetadata>
+    }
+
+    class "ResourceMetadata" as resMeta <<bytecode/format.rs:41-46>> {
+        name: SmolStr
+        process_image: ProcessImageConfig
+        tasks: Vec<TaskConfig>
+    }
+
+    rectangle "Sections" as sections {
+        card "StringTable" as secStr
+        card "TypeTable" as secType
+        card "ConstPool" as secConst
+        card "PouIndex" as secPou
+        card "PouBodies" as secBodies
+        card "GlobalInit" as secGlobal
+        card "TaskConfig" as secTask
+    }
+
+    bcModule --> bcVersion
+    bcModule --> sections
+    bcMeta --> resMeta
+}
+
+note right of bcModule
+    **Bytecode Constants:**
+    MAGIC: [u8; 4] = "STBC"
+    VERSION: 1.1
+    HEADER_SIZE: 24 bytes
+    FLAG_CRC32: 0x0001
+end note
+
+note right of bytecodePkg
+    Bytecode is currently a container
+    + metadata format (not a VM).
+end note
+
+package "Bytecode Apply" as bcApply #Wheat {
+    component "apply_bytecode_metadata()" as applyMeta
+    component "apply_bytecode_module()" as applyModule
+    applyModule --> applyMeta
+}
+
+note right of applyMeta
+    • load ResourceMetadata
+    • size process image
+    • configure task list
+end note
+
+note right of applyModule
+    • load POU bodies + constants
+    • attach debug map entries
+end note
+
+' ============================================================
+' STANDARD LIBRARY
+' ============================================================
+package "Standard Library" as stdlibPkg #PaleTurquoise {
+
+    component "stdlib/" as stdlib <<stdlib/>> {
+        card "**Functions:**\nABS, SQRT, SIN, COS, TAN\nMIN, MAX, LIMIT, MUX, SEL\nLEN, LEFT, RIGHT, MID, CONCAT\nTO_INT, TO_REAL, TO_STRING\nSHL, SHR, ROL, ROR, TRUNC" as stdFuncs
+
+        card "**Function Blocks:**\nTON - Timer On Delay\nTOF - Timer Off Delay\nTP - Pulse Timer\nCTU - Count Up\nCTD - Count Down\nCTUD - Count Up/Down\nR_TRIG - Rising Edge\nF_TRIG - Falling Edge\nSR - Set/Reset\nRS - Reset/Set" as stdFBs
+    }
+}
+
+' ============================================================
+' I/O INTERFACE
+' ============================================================
+package "I/O Interface" as ioPkg #LightGray {
+
+    class "IoSubsystem" as ioSubsystem {
+        interface: IoInterface
+        drivers: Vec<IoDriverEntry>
+        safe_state: IoSafeState
+        --
+        +apply_safe_state()
+        +update_health()
+    }
+
+    class "IoInterface" as ioIface {
+        inputs: Vec<u8>
+        outputs: Vec<u8>
+        memory: Vec<u8>
+        --
+        +read(address) → Value
+        +write(address, value)
+    }
+
+    interface "IoDriver" as ioDriver {
+        +read_inputs(io)
+        +write_outputs(io)
+    }
+
+    ioSubsystem --> ioIface
+    ioSubsystem --> ioDriver : uses
+}
+
+' ============================================================
+' CONNECTIONS
+' ============================================================
+
+runtime --> varStorage
+runtime --> evalCtx : creates
+runtime --> cyclePkg : execute_cycle()
+runtime --> stdlibPkg
+runtime --> ioPkg
+runtime --> bcApply
+
+evalCtx --> stmtPkg : executes
+evalCtx --> exprPkg : evaluates
+evalCtx --> varStorage : reads/writes
+
+' ============================================================
+' LEGEND
+' ============================================================
+
+legend right
+    **Key Files:**
+    • runtime/core.rs:22 - Runtime struct
+    • runtime/cycle.rs:18 - execute_cycle()
+    • memory.rs:63 - VariableStorage
+    • eval/stmt.rs:30 - Stmt enum
+    • eval/expr/ast.rs:6 - Expr enum
+    • bytecode/format.rs:494 - BytecodeModule
+    • stdlib/ - Standard library
+
+    **Execution Model:**
+    1. Tasks scheduled by priority + interval
+    2. Programs execute within tasks
+    3. EvalContext provides runtime state
+    4. Stmt/Expr AST interpreted directly
+    5. Debug hooks at statement boundaries
+
+    **Memory Areas:**
+    • Globals - Program-wide variables
+    • Frames - Function call locals
+    • Instances - FB/Class state
+    • Retain - Persistent across restart
+    • I/O - Direct addresses (%I, %Q, %M)
+end legend
+
+@enduml

@@ -1,0 +1,44 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# VS Code Extension
+editors/vscode/node_modules/
+editors/vscode/out/
+editors/vscode/*.vsix
+
+# Local tooling caches
+.claude/
+.claude-plugin/
+.trust-lsp/
+**/.trust-lsp/
+manual-tests/**/target/
+manual-tests/**/.vscode/
+
+# Test outputs
+*.log
+runtime-*.log
+runtime-*.log.runtime.log
+
+# Local manual runtime projects
+/tmp/
+/runtime.toml
+/io.toml
+/program.stbc
+/sources/
+
+# Internal docs (not for public repo)
+docs/internal/
+CLAUDE.md
+AGENTS.md
