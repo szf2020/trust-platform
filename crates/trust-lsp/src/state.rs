@@ -679,11 +679,12 @@ pub(crate) fn path_to_uri(path: &Path) -> Option<Url> {
     if let Ok(url) = Url::from_file_path(path) {
         return Some(url);
     }
-    if !path.is_absolute() {
+    let raw_str = path.to_string_lossy();
+    if !path.is_absolute() && !raw_str.starts_with("/") {
         return None;
     }
-    let mut raw = path.to_string_lossy().replace('\\', "/");
-    if !raw.starts_with('/') {
+    let mut raw = raw_str.replace("\\", "/");
+    if !raw.starts_with("/") {
         raw = format!("/{raw}");
     }
     Url::parse(&format!("file://{raw}")).ok()
