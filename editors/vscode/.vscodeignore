@@ -18,3 +18,7 @@ package-lock.json
 
 # Keep node_modules (production deps) and out/**
 # Keep bin/**, syntaxes/**, language-configuration.json, media/**, README.md, icon.png
+
+# Ensure runtime dependencies are packaged
+!node_modules/**
+
