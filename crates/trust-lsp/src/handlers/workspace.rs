@@ -591,10 +591,10 @@ pub async fn did_rename_files(
     let mut dirty_cache_dirs: HashSet<PathBuf> = HashSet::new();
 
     for file in params.files {
-        let old_uri = file.old_uri;
-        let new_uri = file.new_uri;
-        let old_path = uri_to_path(&old_uri);
-        let new_path = uri_to_path(&new_uri);
+        let old_uri = Url::parse(&file.old_uri).ok();
+        let new_uri = Url::parse(&file.new_uri).ok();
+        let old_path = old_uri.as_ref().and_then(uri_to_path);
+        let new_path = new_uri.as_ref().and_then(uri_to_path);
 
         if old_path.as_ref().is_some_and(|path| is_config_file(path))
             || new_path.as_ref().is_some_and(|path| is_config_file(path))
@@ -602,10 +602,10 @@ pub async fn did_rename_files(
             config_changed = true;
         }
 
-        if let Some(path) = old_path.as_ref() {
+        if let (Some(old_uri), Some(path)) = (old_uri.as_ref(), old_path.as_ref()) {
             if is_st_file(path) {
                 let cache_dir = state
-                    .workspace_config_for_uri(&old_uri)
+                    .workspace_config_for_uri(old_uri)
                     .and_then(|config| config.index_cache_dir());
                 if let Some(dir) = cache_dir.clone() {
                     let cache = cache_by_dir
@@ -614,16 +614,16 @@ pub async fn did_rename_files(
                     cache.remove_path(path);
                     dirty_cache_dirs.insert(dir);
                 }
-                if state.remove_document(&old_uri).is_some() {
+                if state.remove_document(old_uri).is_some() {
                     removed += 1;
                 }
             }
         }
 
-        if let Some(path) = new_path.as_ref() {
+        if let (Some(new_uri), Some(path)) = (new_uri.as_ref(), new_path.as_ref()) {
             if is_st_file(path) {
                 let cache_dir = state
-                    .workspace_config_for_uri(&new_uri)
+                    .workspace_config_for_uri(new_uri)
                     .and_then(|config| config.index_cache_dir());
                 let Ok(content) = std::fs::read_to_string(path) else {
                     continue;
