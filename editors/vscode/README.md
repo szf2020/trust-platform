@@ -41,6 +41,15 @@ code --install-extension trust-platform.trust-lsp
 - Debugger (DAP) integration is available but requires a `trust-debug` adapter executable.
 - Diagnostics display IEC references when provided by the server (in Problems/hover) with links to local spec docs.
 
+## Screenshots (coming soon)
+
+We will add Marketplace screenshots and a short GIF here.
+Planned assets live in `editors/vscode/assets/`:
+- `screenshot-diagnostics.png`
+- `screenshot-refactor.png`
+- `screenshot-debug.png`
+- `demo-rename.gif`
+
 ## Language Model Tools (lm.tools)
 The extension exposes structured tool calls for AI assistants that support VS Code language model tools.
 Tool-calling models can read/write files, inspect LSP data, and trigger debug helpers.

@@ -28,6 +28,10 @@ code --install-extension trust-platform.trust-lsp
 - Inline values and I/O panel driven by the runtime control endpoint.
 - DAP debugging with breakpoints, stepping, and variables.
 
+## Screenshots (coming soon)
+
+We will add Marketplace screenshots and a short GIF to showcase diagnostics, refactors, and debugging.
+
 ## Components
 
 | Component | Binary | Purpose |
