@@ -699,11 +699,38 @@ pub(crate) fn path_to_uri(path: &Path) -> Option<Url> {
     if let Ok(url) = Url::from_file_path(path) {
         return Some(url);
     }
+
+    #[cfg(windows)]
+    {
+        if let Some(raw) = path.to_str() {
+            if let Some(rest) = raw.strip_prefix("\\?\\UNC\\") {
+                let unc = rest.replace('\\', "/");
+                return Url::parse(&format!("file://{unc}")).ok();
+            }
+            if let Some(rest) = raw.strip_prefix("\\?\\") {
+                let stripped = PathBuf::from(rest);
+                if let Ok(url) = Url::from_file_path(&stripped) {
+                    return Some(url);
+                }
+            }
+        }
+    }
+
     let raw_str = path.to_string_lossy();
     if !path.is_absolute() && !raw_str.starts_with("/") {
         return None;
     }
-    let mut raw = raw_str.replace("\\", "/");
+    let mut raw = raw_str.replace('\\', "/");
+
+    #[cfg(windows)]
+    {
+        if raw.starts_with("//?/UNC/") {
+            raw = format!("//{}", raw.trim_start_matches("//?/UNC/"));
+        } else if raw.starts_with("//?/") {
+            raw = raw.trim_start_matches("//?/").to_string();
+        }
+    }
+
     if !raw.starts_with("/") {
         raw = format!("/{raw}");
     }
