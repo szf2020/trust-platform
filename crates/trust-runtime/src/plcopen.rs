@@ -16,6 +16,7 @@ const SOURCE_MAP_DATA_NAME: &str = "trust.sourceMap";
 const VENDOR_EXT_DATA_NAME: &str = "trust.vendorExtensions";
 const VENDOR_EXTENSION_HOOK_FILE: &str = "plcopen.vendor-extensions.xml";
 const IMPORTED_VENDOR_EXTENSION_FILE: &str = "plcopen.vendor-extensions.imported.xml";
+const MIGRATION_REPORT_FILE: &str = "interop/plcopen-migration-report.json";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PlcopenProfile {
@@ -42,9 +43,41 @@ pub struct PlcopenImportReport {
     pub project_root: PathBuf,
     pub written_sources: Vec<PathBuf>,
     pub imported_pous: usize,
+    pub discovered_pous: usize,
     pub warnings: Vec<String>,
     pub unsupported_nodes: Vec<String>,
     pub preserved_vendor_extensions: Option<PathBuf>,
+    pub migration_report_path: PathBuf,
+    pub source_coverage_percent: f64,
+    pub semantic_loss_percent: f64,
+    pub detected_ecosystem: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlcopenMigrationReport {
+    pub profile: String,
+    pub namespace: String,
+    pub source_xml: PathBuf,
+    pub project_root: PathBuf,
+    pub detected_ecosystem: String,
+    pub discovered_pous: usize,
+    pub importable_pous: usize,
+    pub imported_pous: usize,
+    pub skipped_pous: usize,
+    pub source_coverage_percent: f64,
+    pub semantic_loss_percent: f64,
+    pub unsupported_nodes: Vec<String>,
+    pub warnings: Vec<String>,
+    pub entries: Vec<PlcopenMigrationEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlcopenMigrationEntry {
+    pub name: String,
+    pub pou_type_raw: Option<String>,
+    pub resolved_pou_type: Option<String>,
+    pub status: String,
+    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -79,10 +112,15 @@ impl PlcopenPouType {
     }
 
     fn from_xml(text: &str) -> Option<Self> {
-        match text.trim().to_ascii_lowercase().as_str() {
-            "program" => Some(Self::Program),
-            "function" => Some(Self::Function),
-            "functionblock" => Some(Self::FunctionBlock),
+        let normalized = text
+            .chars()
+            .filter(|ch| ch.is_ascii_alphanumeric())
+            .map(|ch| ch.to_ascii_lowercase())
+            .collect::<String>();
+        match normalized.as_str() {
+            "program" | "prg" => Some(Self::Program),
+            "function" | "fc" | "fun" => Some(Self::Function),
+            "functionblock" | "fb" => Some(Self::FunctionBlock),
             _ => None,
         }
     }
@@ -295,6 +333,9 @@ pub fn import_xml_to_project(
     let mut unsupported_nodes = Vec::new();
     let mut written_sources = Vec::new();
     let mut seen_files = HashSet::new();
+    let mut migration_entries = Vec::new();
+    let mut discovered_pous = 0usize;
+    let mut loss_warnings = 0usize;
 
     if let Some(namespace) = root.tag_name().namespace() {
         if namespace != PLCOPEN_NAMESPACE {
@@ -308,6 +349,7 @@ pub fn import_xml_to_project(
     inspect_unsupported_structure(root, &mut unsupported_nodes, &mut warnings);
 
     let source_map = parse_embedded_source_map(root);
+    let detected_ecosystem = detect_vendor_ecosystem(root, &xml_text);
 
     let sources_root = project_root.join("sources");
     std::fs::create_dir_all(&sources_root)
@@ -315,44 +357,88 @@ pub fn import_xml_to_project(
 
     for pou in root
         .descendants()
-        .filter(|node| is_element_named(*node, "pou"))
+        .filter(|node| is_element_named_ci(*node, "pou"))
     {
-        let Some(name) = pou.attribute("name") else {
+        discovered_pous += 1;
+        let pou_name = extract_pou_name(pou);
+        let entry_name = pou_name
+            .clone()
+            .unwrap_or_else(|| format!("unnamed_{discovered_pous}"));
+        let pou_type_raw = attribute_ci(pou, "pouType").or_else(|| attribute_ci(pou, "type"));
+        let resolved_pou_type = pou_type_raw.as_deref().and_then(PlcopenPouType::from_xml);
+        let st_body = extract_st_body(pou);
+
+        let Some(name) = pou_name else {
             warnings.push("skipping <pou> without name attribute".to_string());
+            loss_warnings += 1;
+            migration_entries.push(PlcopenMigrationEntry {
+                name: entry_name,
+                pou_type_raw,
+                resolved_pou_type: resolved_pou_type.map(|kind| kind.as_xml().to_string()),
+                status: "skipped".to_string(),
+                reason: Some("missing name".to_string()),
+            });
             continue;
         };
-        let Some(pou_type_raw) = pou.attribute("pouType") else {
+
+        let Some(pou_type_raw) = pou_type_raw else {
             warnings.push(format!("skipping pou '{}': missing pouType", name));
+            loss_warnings += 1;
+            migration_entries.push(PlcopenMigrationEntry {
+                name,
+                pou_type_raw: None,
+                resolved_pou_type: None,
+                status: "skipped".to_string(),
+                reason: Some("missing pouType/type attribute".to_string()),
+            });
             continue;
         };
-        let Some(_pou_type) = PlcopenPouType::from_xml(pou_type_raw) else {
+
+        let Some(pou_type) = PlcopenPouType::from_xml(&pou_type_raw) else {
             warnings.push(format!(
                 "skipping pou '{}': unsupported pouType '{}'",
                 name, pou_type_raw
             ));
             unsupported_nodes.push(format!("pouType:{}", pou_type_raw));
+            loss_warnings += 1;
+            migration_entries.push(PlcopenMigrationEntry {
+                name,
+                pou_type_raw: Some(pou_type_raw),
+                resolved_pou_type: None,
+                status: "skipped".to_string(),
+                reason: Some("unsupported pouType".to_string()),
+            });
             continue;
         };
 
-        let Some(st_node) = pou
-            .children()
-            .find(|child| is_element_named(*child, "body"))
-            .and_then(|body| {
-                body.children()
-                    .find(|candidate| is_element_named(*candidate, "ST"))
-            })
-        else {
+        let Some(body) = st_body else {
             warnings.push(format!("skipping pou '{}': missing body/ST", name));
+            loss_warnings += 1;
+            migration_entries.push(PlcopenMigrationEntry {
+                name,
+                pou_type_raw: Some(pou_type_raw),
+                resolved_pou_type: Some(pou_type.as_xml().to_string()),
+                status: "skipped".to_string(),
+                reason: Some("missing body/ST".to_string()),
+            });
             continue;
         };
 
-        let body = st_node.text().map(str::trim).unwrap_or_default();
+        let body = body.trim();
         if body.is_empty() {
             warnings.push(format!("skipping pou '{}': empty ST body", name));
+            loss_warnings += 1;
+            migration_entries.push(PlcopenMigrationEntry {
+                name,
+                pou_type_raw: Some(pou_type_raw),
+                resolved_pou_type: Some(pou_type.as_xml().to_string()),
+                status: "skipped".to_string(),
+                reason: Some("empty ST body".to_string()),
+            });
             continue;
         }
 
-        let mut file_name = sanitize_filename(name);
+        let mut file_name = sanitize_filename(&name);
         if file_name.is_empty() {
             file_name = "unnamed".to_string();
         }
@@ -368,10 +454,18 @@ pub fn import_xml_to_project(
             .with_context(|| format!("failed to write '{}'", candidate.display()))?;
         written_sources.push(candidate);
 
+        migration_entries.push(PlcopenMigrationEntry {
+            name: name.clone(),
+            pou_type_raw: Some(pou_type_raw),
+            resolved_pou_type: Some(pou_type.as_xml().to_string()),
+            status: "imported".to_string(),
+            reason: None,
+        });
+
         if let Some(entry) = source_map.as_ref().and_then(|map| {
             map.entries
                 .iter()
-                .find(|entry| entry.name.eq_ignore_ascii_case(name))
+                .find(|entry| entry.name.eq_ignore_ascii_case(&name))
         }) {
             warnings.push(format!(
                 "source map: pou '{}' originated from {}:{}",
@@ -380,23 +474,69 @@ pub fn import_xml_to_project(
         }
     }
 
-    if written_sources.is_empty() {
-        anyhow::bail!(
-            "no importable PLCopen ST POUs found in {}",
-            xml_path.display()
-        );
+    if discovered_pous == 0 {
+        warnings.push("no <pou> nodes discovered in input XML".to_string());
+        loss_warnings += 1;
     }
+
+    let imported_pous = written_sources.len();
+    let importable_pous = migration_entries
+        .iter()
+        .filter(|entry| entry.status == "imported")
+        .count();
+    let skipped_pous = discovered_pous.saturating_sub(imported_pous);
+    let source_coverage_percent = calculate_source_coverage(imported_pous, discovered_pous);
+    let semantic_loss_percent = calculate_semantic_loss(
+        imported_pous,
+        discovered_pous,
+        unsupported_nodes.len(),
+        loss_warnings,
+    );
 
     let preserved_vendor_extensions =
         preserve_vendor_extensions(root, &xml_text, project_root, &mut warnings)?;
+    let migration_report = PlcopenMigrationReport {
+        profile: PROFILE_NAME.to_string(),
+        namespace: root
+            .tag_name()
+            .namespace()
+            .unwrap_or(PLCOPEN_NAMESPACE)
+            .to_string(),
+        source_xml: xml_path.to_path_buf(),
+        project_root: project_root.to_path_buf(),
+        detected_ecosystem: detected_ecosystem.clone(),
+        discovered_pous,
+        importable_pous,
+        imported_pous,
+        skipped_pous,
+        source_coverage_percent,
+        semantic_loss_percent,
+        unsupported_nodes: unsupported_nodes.clone(),
+        warnings: warnings.clone(),
+        entries: migration_entries,
+    };
+    let migration_report_path = write_migration_report(project_root, &migration_report)?;
+
+    if written_sources.is_empty() {
+        anyhow::bail!(
+            "no importable PLCopen ST POUs found in {} (migration report: {})",
+            xml_path.display(),
+            migration_report_path.display()
+        );
+    }
 
     Ok(PlcopenImportReport {
         project_root: project_root.to_path_buf(),
-        imported_pous: written_sources.len(),
+        imported_pous,
+        discovered_pous,
         written_sources,
         warnings,
         unsupported_nodes,
         preserved_vendor_extensions,
+        migration_report_path,
+        source_coverage_percent,
+        semantic_loss_percent,
+        detected_ecosystem,
     })
 }
 
@@ -575,8 +715,153 @@ fn sanitize_filename(name: &str) -> String {
         .collect::<String>()
 }
 
+#[cfg(test)]
 fn is_element_named(node: roxmltree::Node<'_, '_>, name: &str) -> bool {
     node.is_element() && node.tag_name().name() == name
+}
+
+fn is_element_named_ci(node: roxmltree::Node<'_, '_>, name: &str) -> bool {
+    node.is_element() && node.tag_name().name().eq_ignore_ascii_case(name)
+}
+
+fn attribute_ci(node: roxmltree::Node<'_, '_>, name: &str) -> Option<String> {
+    node.attributes()
+        .find(|attribute| attribute.name().eq_ignore_ascii_case(name))
+        .map(|attribute| attribute.value().to_string())
+}
+
+fn extract_pou_name(node: roxmltree::Node<'_, '_>) -> Option<String> {
+    attribute_ci(node, "name")
+        .or_else(|| attribute_ci(node, "pouName"))
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .or_else(|| {
+            node.children()
+                .find(|child| is_element_named_ci(*child, "name"))
+                .and_then(extract_text_content)
+        })
+}
+
+fn extract_st_body(node: roxmltree::Node<'_, '_>) -> Option<String> {
+    let body = node
+        .children()
+        .find(|child| is_element_named_ci(*child, "body"))?;
+    for preferred in ["ST", "st", "text", "Text", "xhtml"] {
+        if let Some(candidate) = body
+            .descendants()
+            .find(|entry| is_element_named_ci(*entry, preferred))
+            .and_then(extract_text_content)
+        {
+            return Some(candidate);
+        }
+    }
+    extract_text_content(body)
+}
+
+fn extract_text_content(node: roxmltree::Node<'_, '_>) -> Option<String> {
+    let text = node
+        .descendants()
+        .filter(|entry| entry.is_text())
+        .filter_map(|entry| entry.text())
+        .collect::<String>();
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn calculate_source_coverage(imported: usize, discovered: usize) -> f64 {
+    if discovered == 0 {
+        return 0.0;
+    }
+    round_percent((imported as f64 / discovered as f64) * 100.0)
+}
+
+fn calculate_semantic_loss(
+    imported: usize,
+    discovered: usize,
+    unsupported_nodes: usize,
+    loss_warnings: usize,
+) -> f64 {
+    if discovered == 0 {
+        return 100.0;
+    }
+
+    let skipped = discovered.saturating_sub(imported);
+    let skipped_ratio = skipped as f64 / discovered as f64;
+    let unsupported_ratio =
+        unsupported_nodes as f64 / (unsupported_nodes as f64 + discovered as f64);
+    let warning_ratio = (loss_warnings as f64 / (discovered as f64 * 2.0)).min(1.0);
+
+    round_percent((skipped_ratio * 70.0) + (unsupported_ratio * 20.0) + (warning_ratio * 10.0))
+}
+
+fn round_percent(value: f64) -> f64 {
+    (value * 100.0).round() / 100.0
+}
+
+fn detect_vendor_ecosystem(root: roxmltree::Node<'_, '_>, xml_text: &str) -> String {
+    let mut hints = String::new();
+    for node in root.descendants().filter(|node| node.is_element()) {
+        for attribute in node.attributes() {
+            hints.push_str(attribute.value());
+            hints.push(' ');
+        }
+        if is_element_named_ci(node, "data") {
+            if let Some(name) = attribute_ci(node, "name") {
+                hints.push_str(&name);
+                hints.push(' ');
+            }
+        }
+    }
+    hints.push_str(xml_text);
+    let normalized = hints.to_ascii_lowercase();
+
+    if normalized.contains("twincat") || normalized.contains("beckhoff") {
+        "beckhoff-twincat".to_string()
+    } else if normalized.contains("codesys")
+        || normalized.contains("3s-smart")
+        || normalized.contains("machine expert")
+    {
+        "codesys".to_string()
+    } else if normalized.contains("siemens")
+        || normalized.contains("tia portal")
+        || normalized.contains("step7")
+    {
+        "siemens-tia".to_string()
+    } else if normalized.contains("rockwell")
+        || normalized.contains("studio 5000")
+        || normalized.contains("allen-bradley")
+    {
+        "rockwell-studio5000".to_string()
+    } else {
+        "generic-plcopen".to_string()
+    }
+}
+
+fn write_migration_report(
+    project_root: &Path,
+    report: &PlcopenMigrationReport,
+) -> anyhow::Result<PathBuf> {
+    let report_path = project_root.join(MIGRATION_REPORT_FILE);
+    if let Some(parent) = report_path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create migration report directory '{}'",
+                parent.display()
+            )
+        })?;
+    }
+    let json = serde_json::to_string_pretty(report)?;
+    std::fs::write(&report_path, format!("{json}\n")).with_context(|| {
+        format!(
+            "failed to write PLCopen migration report '{}'",
+            report_path.display()
+        )
+    })?;
+    Ok(report_path)
 }
 
 fn inspect_unsupported_structure(
@@ -586,17 +871,20 @@ fn inspect_unsupported_structure(
 ) {
     for child in root.children().filter(|child| child.is_element()) {
         let name = child.tag_name().name();
-        if !matches!(name, "fileHeader" | "contentHeader" | "types" | "addData") {
+        if !matches!(
+            name.to_ascii_lowercase().as_str(),
+            "fileheader" | "contentheader" | "types" | "adddata"
+        ) {
             unsupported_nodes.push(name.to_string());
             warnings.push(format!(
                 "unsupported PLCopen node '<{}>' preserved as metadata only",
                 name
             ));
         }
-        if name == "types" {
+        if name.eq_ignore_ascii_case("types") {
             for type_child in child.children().filter(|entry| entry.is_element()) {
                 let type_name = type_child.tag_name().name();
-                if type_name != "pous" {
+                if !type_name.eq_ignore_ascii_case("pous") {
                     unsupported_nodes.push(format!("types/{}", type_name));
                     warnings.push(format!(
                         "unsupported PLCopen node '<types>/<{}>' skipped (strict subset)",
@@ -612,17 +900,15 @@ fn parse_embedded_source_map(root: roxmltree::Node<'_, '_>) -> Option<SourceMapP
     let payload = root
         .descendants()
         .find(|node| {
-            is_element_named(*node, "data")
-                && node
-                    .attribute("name")
-                    .is_some_and(|name| name == SOURCE_MAP_DATA_NAME)
+            is_element_named_ci(*node, "data")
+                && attribute_ci(*node, "name").is_some_and(|name| name == SOURCE_MAP_DATA_NAME)
         })
         .and_then(|node| {
             node.children()
-                .find(|child| is_element_named(*child, "text"))
-                .and_then(|text| text.text())
+                .find(|child| is_element_named_ci(*child, "text"))
+                .and_then(extract_text_content)
         })?;
-    serde_json::from_str::<SourceMapPayload>(payload).ok()
+    serde_json::from_str::<SourceMapPayload>(&payload).ok()
 }
 
 fn preserve_vendor_extensions(
@@ -634,10 +920,8 @@ fn preserve_vendor_extensions(
     let mut preserved = Vec::new();
 
     for node in root.descendants().filter(|node| {
-        is_element_named(*node, "data")
-            && node
-                .attribute("name")
-                .is_none_or(|name| name != SOURCE_MAP_DATA_NAME)
+        is_element_named_ci(*node, "data")
+            && attribute_ci(*node, "name").is_none_or(|name| name != SOURCE_MAP_DATA_NAME)
     }) {
         let range = node.range();
         if let Some(slice) = xml_text.get(range) {
@@ -747,6 +1031,10 @@ END_FUNCTION
         let import_project = temp_dir("plcopen-roundtrip-import");
         let import = import_xml_to_project(&xml_a, &import_project).expect("import");
         assert_eq!(import.imported_pous, 2);
+        assert_eq!(import.discovered_pous, 2);
+        assert!(import.migration_report_path.is_file());
+        assert_eq!(import.source_coverage_percent, 100.0);
+        assert_eq!(import.semantic_loss_percent, 0.0);
 
         let xml_b = import_project.join("build/plcopen.xml");
         let export_b = export_project_to_xml(&import_project, &xml_b).expect("export B");
@@ -795,11 +1083,15 @@ END_PROGRAM
 
         let report = import_xml_to_project(&xml_path, &project).expect("import XML");
         assert_eq!(report.imported_pous, 1);
+        assert_eq!(report.discovered_pous, 1);
         assert!(!report.unsupported_nodes.is_empty());
         assert!(report
             .unsupported_nodes
             .iter()
             .any(|entry| entry.contains("types/dataTypes")));
+        assert!(report.migration_report_path.is_file());
+        assert!(report.source_coverage_percent > 0.0);
+        assert!(report.semantic_loss_percent > 0.0);
         let source = std::fs::read_to_string(&report.written_sources[0]).expect("read source");
         assert!(source.contains("PROGRAM Main"));
         let vendor = report

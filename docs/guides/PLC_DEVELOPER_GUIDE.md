@@ -43,6 +43,13 @@ trust-runtime plcopen export --project <project-folder> --output <project-folder
 trust-runtime plcopen import --input <plcopen.xml> --project <target-project-folder>
 ```
 
+Import writes migrated sources to `sources/` and a migration report to:
+
+`<project-folder>/interop/plcopen-migration-report.json`
+
+The report includes detected vendor ecosystem, discovered/imported/skipped POU
+counts, source coverage, semantic-loss score, and per-POU skip reasons.
+
 Start runtime:
 ```
 trust-runtime --project <project-folder>

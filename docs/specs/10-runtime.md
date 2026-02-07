@@ -3757,6 +3757,12 @@ Runtime exposes a strict PLCopen XML profile through `trust-runtime plcopen`:
 - `trust-runtime plcopen profile` prints the supported profile contract.
 - `trust-runtime plcopen export` exports ST POUs to PLCopen XML.
 - `trust-runtime plcopen import` imports supported PLCopen POUs into `sources/`.
+- `trust-runtime plcopen import` also emits a migration report at
+  `interop/plcopen-migration-report.json` with:
+  - discovered/imported/skipped POU counts
+  - source coverage (% imported/discovered)
+  - semantic-loss score (weighted from skipped POUs + unsupported nodes/warnings)
+  - per-POU entry status (`imported` or `skipped`) and skip reasons
 
 Current strict subset contract:
 
@@ -3765,6 +3771,13 @@ Current strict subset contract:
 - Supported POU body: `ST` text bodies for `PROGRAM`, `FUNCTION`, `FUNCTION_BLOCK`
 - Source mapping: embedded `addData` payload + sidecar `*.source-map.json`
 - Unsupported nodes: reported as warnings and preserved via vendor extension hooks
+- Vendor-variant import aliases:
+  - `PROGRAM`/`PRG` -> `program`
+  - `FUNCTION`/`FC`/`FUN` -> `function`
+  - `FUNCTION_BLOCK`/`FB` -> `functionBlock`
+- Vendor ecosystem detection heuristics for migration reports:
+  - `codesys`, `beckhoff-twincat`, `siemens-tia`, `rockwell-studio5000`,
+    fallback `generic-plcopen`
 
 ### Appendix D: References
 

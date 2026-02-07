@@ -100,6 +100,15 @@ fn print_import_report(report: &PlcopenImportReport) {
             report.project_root.display()
         ))
     );
+    println!(
+        "Discovered {} POU(s), source coverage {:.2}%, semantic loss {:.2}%",
+        report.discovered_pous, report.source_coverage_percent, report.semantic_loss_percent
+    );
+    println!("Detected ecosystem: {}", report.detected_ecosystem);
+    println!(
+        "Migration report: {}",
+        report.migration_report_path.display()
+    );
     for path in report.written_sources.iter().take(10) {
         println!(" - {}", path.display());
     }

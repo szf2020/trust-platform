@@ -140,11 +140,23 @@ END_FUNCTION_BLOCK
         "expected import success, stderr was:\n{}",
         String::from_utf8_lossy(&import_result.stderr)
     );
+    let import_stdout = String::from_utf8_lossy(&import_result.stdout);
+    assert!(
+        import_stdout.contains("Migration report:"),
+        "expected migration report path in import output, got:\n{import_stdout}"
+    );
 
     let imported_sources = imported_project.join("sources");
     assert!(
         imported_sources.is_dir(),
         "import did not create sources directory"
+    );
+    assert!(
+        imported_project
+            .join("interop")
+            .join("plcopen-migration-report.json")
+            .is_file(),
+        "import did not emit migration report"
     );
     let imported_files = std::fs::read_dir(&imported_sources)
         .expect("read imported sources")
