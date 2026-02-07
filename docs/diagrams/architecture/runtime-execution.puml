@@ -178,6 +178,15 @@ package "Control + HMI Contract" as hmiPkg #Lavender {
         card "GET /hmi/export.json\n(standalone assets + routes + schema config)" as hmiExport
     }
 
+    rectangle "Web IDE Preview (/ide)" as ideWeb #Wheat {
+        card "GET /ide\n(preview shell)" as ideRoute
+        card "GET /api/ide/capabilities\n(scope + limits + mode)" as ideCaps
+        card "POST /api/ide/session\n(auth -> session token)" as ideSession
+        card "GET /api/ide/files\n(list sources/**/*.st)" as ideFiles
+        card "GET /api/ide/file\n(open path + version)" as ideOpen
+        card "POST /api/ide/file\n(expected_version + content)" as ideWrite
+    }
+
     hmiSchema --> hmiCustomize
     hmiCustomize --> hmiMerge
     hmiMerge --> hmiEmit
@@ -193,6 +202,20 @@ package "Control + HMI Contract" as hmiPkg #Lavender {
     hmiPoll ..> hmiTrends : request trends
     hmiPoll ..> hmiAlarms : request alarms
     hmiRoute --> hmiExport
+    ideRoute --> ideCaps
+    ideCaps --> ideSession
+    ideSession --> ideFiles
+    ideFiles --> ideOpen
+    ideOpen --> ideWrite
+
+    note right of ideWrite
+        security boundary:
+        • web auth required for session bootstrap
+        • X-Trust-Ide-Session required for calls
+        • writes allowed only in debug mode
+        • optimistic conflict check via expected_version
+        • source scope limited to sources/**/*.st
+    end note
 }
 
 ' ============================================================

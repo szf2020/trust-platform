@@ -15,7 +15,9 @@ use smol_str::SmolStr;
 use tiny_http::{Header, Method, Response, Server, StatusCode};
 
 use crate::bundle_template::IoConfigTemplate;
-use crate::config::{load_system_io_config, IoConfig, RuntimeConfig, WebAuthMode, WebConfig};
+use crate::config::{
+    load_system_io_config, ControlMode, IoConfig, RuntimeConfig, WebAuthMode, WebConfig,
+};
 use crate::control::{handle_request_value, ControlState};
 use crate::debug::dap::format_value;
 use crate::discovery::DiscoveryState;
@@ -25,9 +27,11 @@ use crate::memory::IoArea;
 use crate::setup::SetupOptions;
 
 mod deploy;
+pub mod ide;
 pub mod pairing;
 
 use deploy::{apply_deploy, apply_rollback, DeployRequest};
+use ide::{IdeError, IdeRole, WebIdeState};
 use pairing::PairingStore;
 
 #[derive(Debug, Deserialize)]
@@ -64,6 +68,18 @@ struct IoConfigResponse {
     use_system_io: bool,
 }
 
+#[derive(Debug, Deserialize)]
+struct IdeSessionRequest {
+    role: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IdeWriteRequest {
+    path: String,
+    expected_version: u64,
+    content: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct IoSafeStateEntry {
     address: String,
@@ -88,6 +104,7 @@ const APP_CSS: &str = include_str!("web/ui/styles.css");
 const HMI_HTML: &str = include_str!("web/ui/hmi.html");
 const HMI_JS: &str = include_str!("web/ui/hmi.js");
 const HMI_CSS: &str = include_str!("web/ui/hmi.css");
+const IDE_HTML: &str = include_str!("web/ui/ide.html");
 
 fn default_bundle_root(bundle_root: &Option<PathBuf>) -> PathBuf {
     bundle_root
@@ -436,6 +453,7 @@ pub fn start_web_server(
             .as_ref()
             .map(|root| Arc::new(PairingStore::load(root.join("pairings.json"))))
     });
+    let ide_state = Arc::new(WebIdeState::new(bundle_root.clone()));
     let bundle_root = bundle_root.clone();
     let handle = thread::spawn(move || {
         for mut request in server.incoming_requests() {
@@ -449,6 +467,12 @@ pub fn start_web_server(
             }
             if method == Method::Get && (url == "/hmi" || url == "/hmi/") {
                 let response = Response::from_string(HMI_HTML)
+                    .with_header(Header::from_bytes("Content-Type", "text/html").unwrap());
+                let _ = request.respond(response);
+                continue;
+            }
+            if method == Method::Get && (url == "/ide" || url == "/ide/") {
+                let response = Response::from_string(IDE_HTML)
                     .with_header(Header::from_bytes("Content-Type", "text/html").unwrap());
                 let _ = request.respond(response);
                 continue;
@@ -863,6 +887,200 @@ pub fn start_web_server(
                 }
                 continue;
             }
+            if method == Method::Get && url == "/api/ide/capabilities" {
+                if !check_auth(&request, auth, &auth_token, pairing.as_deref()) {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "unauthorized" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(401));
+                    let _ = request.respond(response);
+                    continue;
+                }
+                let caps = ide_state.capabilities(ide_write_enabled(&control_state));
+                let response =
+                    Response::from_string(json!({ "ok": true, "result": caps }).to_string())
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                let _ = request.respond(response);
+                continue;
+            }
+            if method == Method::Post && url == "/api/ide/session" {
+                if !check_auth(&request, auth, &auth_token, pairing.as_deref()) {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "unauthorized" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(401));
+                    let _ = request.respond(response);
+                    continue;
+                }
+                let mut body = String::new();
+                if request.as_reader().read_to_string(&mut body).is_err() {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "invalid body" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(400));
+                    let _ = request.respond(response);
+                    continue;
+                }
+                let payload = if body.trim().is_empty() {
+                    IdeSessionRequest { role: None }
+                } else {
+                    match serde_json::from_str::<IdeSessionRequest>(&body) {
+                        Ok(value) => value,
+                        Err(_) => {
+                            let response = Response::from_string(
+                                json!({ "ok": false, "error": "invalid json" }).to_string(),
+                            )
+                            .with_status_code(StatusCode(400));
+                            let _ = request.respond(response);
+                            continue;
+                        }
+                    }
+                };
+                let role = payload
+                    .role
+                    .as_deref()
+                    .and_then(IdeRole::parse)
+                    .unwrap_or(IdeRole::Viewer);
+                match ide_state.create_session(role) {
+                    Ok(session) => {
+                        let response = Response::from_string(
+                            json!({ "ok": true, "result": session }).to_string(),
+                        )
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                        let _ = request.respond(response);
+                    }
+                    Err(error) => {
+                        let _ = request.respond(ide_error_response(error));
+                    }
+                }
+                continue;
+            }
+            if method == Method::Get && url == "/api/ide/files" {
+                let Some(session_token) = ide_session_token(&request) else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "missing X-Trust-Ide-Session" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(401));
+                    let _ = request.respond(response);
+                    continue;
+                };
+                match ide_state.list_sources(session_token.as_str()) {
+                    Ok(files) => {
+                        let response = Response::from_string(
+                            json!({ "ok": true, "result": { "files": files } }).to_string(),
+                        )
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                        let _ = request.respond(response);
+                    }
+                    Err(error) => {
+                        let _ = request.respond(ide_error_response(error));
+                    }
+                }
+                continue;
+            }
+            if method == Method::Get && url.starts_with("/api/ide/file") {
+                let Some(session_token) = ide_session_token(&request) else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "missing X-Trust-Ide-Session" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(401));
+                    let _ = request.respond(response);
+                    continue;
+                };
+                let path = url.split('?').nth(1).and_then(|query| {
+                    query.split('&').find_map(|pair| {
+                        let mut parts = pair.splitn(2, '=');
+                        if parts.next()? == "path" {
+                            Some(decode_url_component(parts.next().unwrap_or_default()))
+                        } else {
+                            None
+                        }
+                    })
+                });
+                let Some(path) = path else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "missing path" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(400));
+                    let _ = request.respond(response);
+                    continue;
+                };
+                match ide_state.open_source(session_token.as_str(), path.as_str()) {
+                    Ok(mut snapshot) => {
+                        if !ide_write_enabled(&control_state) {
+                            snapshot.read_only = true;
+                        }
+                        let response = Response::from_string(
+                            json!({ "ok": true, "result": snapshot }).to_string(),
+                        )
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                        let _ = request.respond(response);
+                    }
+                    Err(error) => {
+                        let _ = request.respond(ide_error_response(error));
+                    }
+                }
+                continue;
+            }
+            if method == Method::Post && url == "/api/ide/file" {
+                let Some(session_token) = ide_session_token(&request) else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "missing X-Trust-Ide-Session" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(401));
+                    let _ = request.respond(response);
+                    continue;
+                };
+                let mut body = String::new();
+                if request.as_reader().read_to_string(&mut body).is_err() {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "invalid body" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(400));
+                    let _ = request.respond(response);
+                    continue;
+                }
+                let payload: IdeWriteRequest = match serde_json::from_str(&body) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        let response = Response::from_string(
+                            json!({ "ok": false, "error": "invalid json" }).to_string(),
+                        )
+                        .with_status_code(StatusCode(400));
+                        let _ = request.respond(response);
+                        continue;
+                    }
+                };
+                match ide_state.apply_source(
+                    session_token.as_str(),
+                    payload.path.as_str(),
+                    payload.expected_version,
+                    payload.content,
+                    ide_write_enabled(&control_state),
+                ) {
+                    Ok(result) => {
+                        let response = Response::from_string(
+                            json!({ "ok": true, "result": result }).to_string(),
+                        )
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                        let _ = request.respond(response);
+                    }
+                    Err(error) => {
+                        let _ = request.respond(ide_error_response(error));
+                    }
+                }
+                continue;
+            }
             if method == Method::Get && url == "/api/pairings" {
                 let list = pairing
                     .as_ref()
@@ -1154,6 +1372,32 @@ fn check_auth(
         .as_ref()
         .map(|store| store.validate(header.as_str()))
         .unwrap_or(false)
+}
+
+fn ide_session_token(request: &tiny_http::Request) -> Option<String> {
+    request
+        .headers()
+        .iter()
+        .find(|header| header.field.equiv("X-Trust-Ide-Session"))
+        .map(|header| header.value.as_str().to_string())
+}
+
+fn ide_write_enabled(control_state: &ControlState) -> bool {
+    control_state
+        .control_mode
+        .lock()
+        .ok()
+        .is_some_and(|mode| matches!(*mode, ControlMode::Debug))
+}
+
+fn ide_error_response(error: IdeError) -> Response<std::io::Cursor<Vec<u8>>> {
+    let mut payload = json!({ "ok": false, "error": error.to_string() });
+    if let Some(version) = error.current_version() {
+        payload["current_version"] = json!(version);
+    }
+    Response::from_string(payload.to_string())
+        .with_status_code(StatusCode(error.status_code()))
+        .with_header(Header::from_bytes("Content-Type", "application/json").unwrap())
 }
 
 fn format_web_url(listen: &str) -> String {

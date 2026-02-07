@@ -149,6 +149,7 @@ package "trust-runtime crate" as struntime #LightYellow {
     component "Watchdog" as watchdog
     component "Control Server\n(IPC)" as controlServer
     component "Web UI Server\n(HTTP)" as webServer
+    component "Web IDE State\n(Session + Versioning)" as webIde
     component "Discovery\n(mDNS)" as discovery
     component "Mesh Sync\n(Peer Data)" as meshSync
 
@@ -189,6 +190,7 @@ package "trust-runtime crate" as struntime #LightYellow {
     controlServer --> runtime : pause/step/io
     runtime --> retainMgr : retain lifecycle
     webServer --> controlServer : status/control
+    webServer --> webIde : /api/ide/*
     meshSync --> runtime : publish/subscribe
 }
 
@@ -209,6 +211,7 @@ package "trust-debug crate" as stdebug #Lavender {
 ' ============================================================
 package "Deployment" as deploy #LightGray {
     artifact "Project Folder\n(Runtime Bundle Format)\nprogram.stbc, runtime.toml, io.toml" as bundle
+    artifact "Project Sources\n(sources/**/*.st)" as sourceFiles
     artifact "System IO Config\n(/etc/trust/io.toml)" as systemIo
     component "Retain Store\n(file/db)" as retainStore
     component "Hardware I/O\n(PLCs, Fieldbus)" as hardwareIo
@@ -249,11 +252,12 @@ harness --> struntime : runtime + bytecode
 stdebug --> struntime : runtime + debug control
 stdebug -up-> vscode : DAP events
 bundle --> launcher : load
+sourceFiles --> webIde : scoped read/write
 systemIo --> launcher : load (fallback)
 retainMgr --> retainStore : load/save
 runtime --> hardwareIo : drivers
 ctlClient --> controlServer : JSON IPC
-browserUi --> webServer : HTTP/WebSocket
+browserUi --> webServer : HTTP (/hmi, /ide, /api/*)
 discovery --> browserUi : mDNS advertise
 meshSync --> peerRuntime : peer link
 

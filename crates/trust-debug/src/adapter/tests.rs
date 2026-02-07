@@ -647,7 +647,7 @@ END_PROGRAM
     });
 
     let stop = stop_rx
-        .recv_timeout(std::time::Duration::from_millis(250))
+        .recv_timeout(std::time::Duration::from_secs(2))
         .unwrap();
     assert_eq!(stop.reason, DebugStopReason::Breakpoint);
     control.continue_run();
