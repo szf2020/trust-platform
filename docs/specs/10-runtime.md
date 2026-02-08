@@ -2697,12 +2697,12 @@ Runtime and debugger behavior are specified in:
 |-------|---------|---------|
 | logos | Lexer generation | 0.14 |
 | rowan | Lossless syntax trees | 0.15 |
-| salsa | Incremental computation | 0.18 |
+| salsa | Incremental query engine | 0.18 |
 | tower-lsp | LSP framework | 0.20 |
 
 #### 2.4 Concurrency Model
 
-- Single-threaded analysis (salsa handles caching)
+- Single-threaded analysis (Salsa-backed source/parse/file symbols/`analyze`/diagnostics/`type_of`)
 - Async I/O for LSP communication (tokio)
 - Document store protected by RwLock
 
@@ -3205,12 +3205,54 @@ enum Type {
 #### 5.5 Salsa Queries
 
 ```rust
-#[salsa::query_group(SemanticDatabaseStorage)]
-trait SemanticDatabase: SyntaxDatabase {
-    fn symbols(&self, file: FileId) -> Arc<SymbolTable>;
-    fn resolve_name(&self, file: FileId, pos: TextSize) -> Option<SymbolId>;
-    fn type_of(&self, file: FileId, expr: ExprId) -> TypeId;
+#[salsa::input]
+struct SourceInput {
+    #[return_ref]
+    text: String,
+}
+
+#[salsa::input]
+struct ProjectInputs {
+    #[return_ref]
+    files: Vec<(FileId, SourceInput)>,
+}
+
+#[salsa::tracked(return_ref)]
+fn parse_green(db: &dyn salsa::Database, input: SourceInput) -> GreenNode;
+
+#[salsa::tracked(return_ref, no_eq)]
+fn file_symbols_query(
+    db: &dyn salsa::Database,
+    input: SourceInput,
+) -> Arc<SymbolTable>;
+
+#[salsa::tracked(return_ref, no_eq)]
+fn analyze_query(
+    db: &dyn salsa::Database,
+    project: ProjectInputs,
+    file_id: FileId,
+) -> Arc<FileAnalysis>;
+
+#[salsa::tracked(return_ref, no_eq)]
+fn diagnostics_query(
+    db: &dyn salsa::Database,
+    project: ProjectInputs,
+    file_id: FileId,
+) -> Arc<Vec<Diagnostic>>;
+
+#[salsa::tracked(no_eq)]
+fn type_of_query(
+    db: &dyn salsa::Database,
+    project: ProjectInputs,
+    file_id: FileId,
+    expr_id: u32,
+) -> TypeId;
+
+trait SemanticDatabase: SourceDatabase {
+    fn file_symbols(&self, file: FileId) -> Arc<SymbolTable>;
+    fn analyze(&self, file: FileId) -> Arc<FileAnalysis>;
     fn diagnostics(&self, file: FileId) -> Arc<Vec<Diagnostic>>;
+    fn type_of(&self, file: FileId, expr_id: u32) -> TypeId;
 }
 ```
 

@@ -630,6 +630,28 @@ fn source_line_for_offset(text: &str, byte_offset: usize) -> Option<String> {
 mod tests {
     use super::*;
 
+    fn strip_ansi(text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut chars = text.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch != '\u{1b}' {
+                out.push(ch);
+                continue;
+            }
+
+            if chars.next_if_eq(&'[').is_none() {
+                continue;
+            }
+
+            for control in chars.by_ref() {
+                if control.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        }
+        out
+    }
+
     #[test]
     fn discovery_finds_test_pous_with_namespace_qualification() {
         let sources = vec![
@@ -863,12 +885,13 @@ END_TEST_PROGRAM
         )
         .expect("human output");
 
-        assert!(output.contains("FAIL [2/3] TEST_PROGRAM::FailCase tests.st:12"));
-        assert!(output.contains("reason   : ASSERT_EQUAL failed: expected <2> & got 3"));
-        assert!(output.contains("source   : ASSERT_EQUAL(INT#2, X);"));
-        assert!(output.contains("Failure summary:"));
-        assert!(output.contains("1. TEST_PROGRAM::FailCase @ tests.st:12"));
-        assert!(output.contains("2. TEST_FUNCTION_BLOCK::ErrCase @ fb_tests.st:20"));
+        let plain = strip_ansi(&output);
+        assert!(plain.contains("FAIL [2/3] TEST_PROGRAM::FailCase tests.st:12"));
+        assert!(plain.contains("reason   : ASSERT_EQUAL failed: expected <2> & got 3"));
+        assert!(plain.contains("source   : ASSERT_EQUAL(INT#2, X);"));
+        assert!(plain.contains("Failure summary:"));
+        assert!(plain.contains("1. TEST_PROGRAM::FailCase @ tests.st:12"));
+        assert!(plain.contains("2. TEST_FUNCTION_BLOCK::ErrCase @ fb_tests.st:20"));
     }
 
     #[test]

@@ -8,10 +8,14 @@ mod tests {
     use std::env;
     use std::fs;
     use std::path::PathBuf;
+    #[cfg(target_os = "linux")]
+    use std::process::Command;
+    #[cfg(target_os = "linux")]
+    use std::sync::OnceLock;
     use std::time::{Duration, Instant};
     use tower_lsp::lsp_types::{
-        CompletionParams, DocumentDiagnosticParams, Position, RenameParams, TextDocumentIdentifier,
-        TextDocumentPositionParams, WorkspaceSymbolParams,
+        CompletionParams, DocumentDiagnosticParams, HoverParams, Position, RenameParams,
+        TextDocumentIdentifier, TextDocumentPositionParams, WorkspaceSymbolParams,
     };
 
     fn position_at(source: &str, needle: &str) -> Position {
@@ -73,6 +77,56 @@ mod tests {
         let uri = tower_lsp::lsp_types::Url::parse("file:///perf/Main.st").unwrap();
         state.open_document(uri.clone(), 1, source.to_string());
         (state, uri)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn clk_tck() -> u64 {
+        static CLK_TCK: OnceLock<u64> = OnceLock::new();
+        *CLK_TCK.get_or_init(|| {
+            Command::new("getconf")
+                .arg("CLK_TCK")
+                .output()
+                .ok()
+                .and_then(|output| String::from_utf8(output.stdout).ok())
+                .and_then(|raw| raw.trim().parse::<u64>().ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(100)
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    fn process_cpu_millis() -> Option<u64> {
+        let stat = fs::read_to_string("/proc/self/stat").ok()?;
+        let close = stat.rfind(')')?;
+        let rest = stat.get(close + 2..)?;
+        let fields: Vec<&str> = rest.split_whitespace().collect();
+        // Fields after comm start at state(3). utime=14, stime=15 => indexes 11 and 12 here.
+        let utime: u64 = fields.get(11)?.parse().ok()?;
+        let stime: u64 = fields.get(12)?.parse().ok()?;
+        Some(((utime + stime) * 1000) / clk_tck())
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn process_cpu_millis() -> Option<u64> {
+        None
+    }
+
+    fn percentile_duration(samples: &[Duration], percentile: u32) -> Duration {
+        let mut sorted: Vec<Duration> = samples.to_vec();
+        sorted.sort_unstable();
+        if sorted.is_empty() {
+            return Duration::from_millis(0);
+        }
+        let clamped = percentile.clamp(1, 100) as usize;
+        let rank = ((sorted.len() - 1) * clamped) / 100;
+        sorted[rank]
+    }
+
+    fn edit_loop_source(tick: usize) -> String {
+        format!(
+            "PROGRAM Main\nVAR\n    counter : INT;\nEND_VAR\ncounter := counter + {};\ncounter := coun\nEND_PROGRAM\n",
+            tick % 1000
+        )
     }
 
     #[test]
@@ -325,5 +379,86 @@ VAR
             avg,
             budget_ms
         );
+    }
+
+    #[test]
+    #[ignore]
+    fn perf_edit_loop_budget() {
+        let initial = edit_loop_source(0);
+        let (state, uri) = perf_state(&initial);
+
+        let hover_params = HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                position: position_at(&initial, "counter +"),
+            },
+            work_done_progress_params: Default::default(),
+        };
+
+        let mut completion_pos = position_at(&initial, "counter := coun");
+        completion_pos.character += 14;
+        let completion_params = CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                position: completion_pos,
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: None,
+        };
+
+        let iterations = env_usize("ST_LSP_PERF_EDIT_LOOP_ITERS", 120).max(1);
+        let avg_budget_ms = env_u64("ST_LSP_PERF_EDIT_LOOP_AVG_MS", 80);
+        let p95_budget_ms = env_u64("ST_LSP_PERF_EDIT_LOOP_P95_MS", 140);
+        let cpu_budget_ms = env_u64("ST_LSP_PERF_EDIT_LOOP_CPU_MS", 70);
+
+        let cpu_start = process_cpu_millis();
+        let mut samples = Vec::with_capacity(iterations);
+
+        for idx in 0..iterations {
+            let next_source = edit_loop_source(idx + 1);
+            let start = Instant::now();
+            state.update_document(&uri, (idx as i32) + 2, next_source);
+            let _ = hover(&state, hover_params.clone());
+            let _ = completion(&state, completion_params.clone());
+            samples.push(start.elapsed());
+        }
+
+        let cpu_end = process_cpu_millis();
+        let total_nanos: u128 = samples.iter().map(Duration::as_nanos).sum();
+        let avg = Duration::from_nanos((total_nanos / iterations as u128) as u64);
+        let p95 = percentile_duration(&samples, 95);
+        let cpu_ms_per_iter = match (cpu_start, cpu_end) {
+            (Some(start), Some(end)) if end >= start => (end - start) as f64 / iterations as f64,
+            _ => 0.0,
+        };
+        println!(
+            "perf_edit_loop_budget backend=salsa avg_ms={:.2} p95_ms={:.2} cpu_ms_per_iter={:.2} iterations={}",
+            avg.as_secs_f64() * 1000.0,
+            p95.as_secs_f64() * 1000.0,
+            cpu_ms_per_iter,
+            iterations
+        );
+
+        assert!(
+            avg.as_millis() <= avg_budget_ms as u128,
+            "edit-loop avg {:?} exceeded budget {}ms",
+            avg,
+            avg_budget_ms
+        );
+        assert!(
+            p95.as_millis() <= p95_budget_ms as u128,
+            "edit-loop p95 {:?} exceeded budget {}ms",
+            p95,
+            p95_budget_ms
+        );
+        if cpu_start.is_some() && cpu_end.is_some() {
+            assert!(
+                cpu_ms_per_iter <= cpu_budget_ms as f64,
+                "edit-loop CPU {:.2}ms/op exceeded budget {}ms/op",
+                cpu_ms_per_iter,
+                cpu_budget_ms
+            );
+        }
     }
 }
