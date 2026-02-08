@@ -5,3 +5,5 @@ pub use super::core::{
 
 #[cfg(test)]
 pub use super::core::workspace_symbol;
+#[cfg(test)]
+pub(crate) use super::core::workspace_symbol_with_ticket_for_tests;

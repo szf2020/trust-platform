@@ -1,6 +1,166 @@
 use super::*;
 
 #[test]
+fn lsp_diagnostics_short_circuit_when_request_ticket_is_cancelled() {
+    let source = r#"
+PROGRAM Test
+    missing := 1;
+END_PROGRAM
+"#;
+    let state = ServerState::new();
+    let uri = tower_lsp::lsp_types::Url::parse("file:///test.st").unwrap();
+    state.open_document(uri.clone(), 1, source.to_string());
+    let doc = state.get_document(&uri).expect("tracked document");
+
+    let stale_ticket = state.begin_semantic_request();
+    let _active_ticket = state.begin_semantic_request();
+
+    let diagnostics = collect_diagnostics_with_ticket_for_tests(
+        &state,
+        &uri,
+        &doc.content,
+        doc.file_id,
+        stale_ticket,
+    );
+    assert!(
+        diagnostics.is_empty(),
+        "cancelled diagnostics ticket should return cleanly without semantic work"
+    );
+}
+
+#[test]
+fn lsp_references_returns_none_when_request_ticket_is_cancelled() {
+    let source = r#"
+PROGRAM Test
+    VAR x : INT; END_VAR
+    x := 1;
+    x := x + 1;
+END_PROGRAM
+"#;
+    let state = ServerState::new();
+    let uri = tower_lsp::lsp_types::Url::parse("file:///test.st").unwrap();
+    state.open_document(uri.clone(), 1, source.to_string());
+
+    let stale_ticket = state.begin_semantic_request();
+    let _active_ticket = state.begin_semantic_request();
+
+    let params = tower_lsp::lsp_types::ReferenceParams {
+        text_document_position: tower_lsp::lsp_types::TextDocumentPositionParams {
+            text_document: tower_lsp::lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+            position: position_at(source, "x : INT"),
+        },
+        context: tower_lsp::lsp_types::ReferenceContext {
+            include_declaration: true,
+        },
+        work_done_progress_params: Default::default(),
+        partial_result_params: Default::default(),
+    };
+    let refs = references_with_ticket_for_tests(&state, params, stale_ticket);
+    assert!(
+        refs.is_none(),
+        "cancelled references ticket should short-circuit without semantic work"
+    );
+}
+
+#[test]
+fn lsp_workspace_symbol_returns_none_when_request_ticket_is_cancelled() {
+    let source = r#"
+PROGRAM TestProgram
+END_PROGRAM
+"#;
+    let state = ServerState::new();
+    let uri = tower_lsp::lsp_types::Url::parse("file:///test.st").unwrap();
+    state.open_document(uri, 1, source.to_string());
+
+    let stale_ticket = state.begin_semantic_request();
+    let _active_ticket = state.begin_semantic_request();
+
+    let params = tower_lsp::lsp_types::WorkspaceSymbolParams {
+        query: "Test".to_string(),
+        work_done_progress_params: Default::default(),
+        partial_result_params: Default::default(),
+    };
+    let symbols = workspace_symbol_with_ticket_for_tests(&state, params, stale_ticket);
+    assert!(
+        symbols.is_none(),
+        "cancelled workspace symbol ticket should short-circuit without semantic work"
+    );
+}
+
+#[test]
+fn lsp_rename_returns_none_when_request_ticket_is_cancelled() {
+    let source = r#"
+PROGRAM Test
+    VAR x : INT; END_VAR
+    x := 1;
+END_PROGRAM
+"#;
+    let state = ServerState::new();
+    let uri = tower_lsp::lsp_types::Url::parse("file:///test.st").unwrap();
+    state.open_document(uri.clone(), 1, source.to_string());
+
+    let stale_ticket = state.begin_semantic_request();
+    let _active_ticket = state.begin_semantic_request();
+
+    let params = tower_lsp::lsp_types::RenameParams {
+        text_document_position: tower_lsp::lsp_types::TextDocumentPositionParams {
+            text_document: tower_lsp::lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+            position: position_at(source, "x : INT"),
+        },
+        new_name: "y".to_string(),
+        work_done_progress_params: Default::default(),
+    };
+    let edit = rename_with_ticket_for_tests(&state, params, stale_ticket);
+    assert!(
+        edit.is_none(),
+        "cancelled rename ticket should short-circuit without semantic work"
+    );
+}
+
+#[test]
+fn lsp_code_action_returns_none_when_request_ticket_is_cancelled() {
+    let source = r#"
+PROGRAM Test
+    VAR x : INT; END_VAR
+    x := TRUE;
+END_PROGRAM
+"#;
+    let state = ServerState::new();
+    let uri = tower_lsp::lsp_types::Url::parse("file:///test.st").unwrap();
+    state.open_document(uri.clone(), 1, source.to_string());
+
+    let stale_ticket = state.begin_semantic_request();
+    let _active_ticket = state.begin_semantic_request();
+
+    let params = tower_lsp::lsp_types::CodeActionParams {
+        text_document: tower_lsp::lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+        range: tower_lsp::lsp_types::Range {
+            start: tower_lsp::lsp_types::Position {
+                line: 0,
+                character: 0,
+            },
+            end: tower_lsp::lsp_types::Position {
+                line: 10,
+                character: 0,
+            },
+        },
+        context: tower_lsp::lsp_types::CodeActionContext {
+            diagnostics: Vec::new(),
+            only: None,
+            trigger_kind: None,
+        },
+        work_done_progress_params: Default::default(),
+        partial_result_params: Default::default(),
+    };
+
+    let actions = code_action_with_ticket_for_tests(&state, params, stale_ticket);
+    assert!(
+        actions.is_none(),
+        "cancelled code action ticket should short-circuit without semantic work"
+    );
+}
+
+#[test]
 fn lsp_hover_variable() {
     let source = r#"
 PROGRAM Test
@@ -2048,7 +2208,9 @@ fn lsp_tutorial_examples_no_unexpected_diagnostics_snapshot() {
         state.open_document(uri.clone(), 1, source.to_string());
 
         let file_id = state.get_document(&uri).expect("tutorial document").file_id;
-        let diagnostics = super::diagnostics::collect_diagnostics(&state, &uri, source, file_id);
+        let diagnostics = super::diagnostics::collect_diagnostics_with_ticket(
+            &state, &uri, source, file_id, None,
+        );
 
         let summary: Vec<String> = diagnostics
             .iter()

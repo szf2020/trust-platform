@@ -3,12 +3,38 @@ use super::symbol_import::SymbolImporter;
 use super::*;
 use rustc_hash::FxHashSet;
 use salsa::Setter;
+use std::sync::atomic::Ordering;
 
 impl Database {
     /// Creates a new empty database.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn source_revision(&self) -> u64 {
+        self.source_revision.load(Ordering::Relaxed)
+    }
+
+    fn with_salsa_state<R>(&self, f: impl FnOnce(&mut salsa_backend::SalsaState) -> R) -> R {
+        let mut state = self.salsa_state.lock();
+        f(&mut state)
+    }
+
+    fn with_salsa_state_read<R>(&self, f: impl FnOnce(&salsa_backend::SalsaState) -> R) -> R {
+        let state = self.salsa_state.lock();
+        f(&state)
+    }
+
+    fn with_synced_salsa_state<R>(&self, f: impl FnOnce(&salsa_backend::SalsaState) -> R) -> R {
+        let revision = self.source_revision();
+        self.with_salsa_state(|state| {
+            if state.synced_revision != revision {
+                self.prepare_salsa_project(state);
+                state.synced_revision = revision;
+            }
+            f(state)
+        })
     }
 
     fn source_input_for_file(
@@ -35,6 +61,26 @@ impl Database {
         Some(source)
     }
 
+    fn source_handle_for_file(
+        &self,
+        file_id: FileId,
+    ) -> Option<(salsa_backend::SalsaDatabase, salsa_backend::SourceInput)> {
+        if let Some(result) = self.with_salsa_state_read(|state| {
+            state
+                .sources
+                .get(&file_id)
+                .copied()
+                .map(|source| (state.db.clone(), source))
+        }) {
+            return Some(result);
+        }
+
+        self.with_salsa_state(|state| {
+            self.source_input_for_file(state, file_id)
+                .map(|source| (state.db.clone(), source))
+        })
+    }
+
     fn project_symbol_tables(&self) -> FxHashMap<FileId, Arc<SymbolTable>> {
         let mut tables = FxHashMap::default();
         for &file_id in self.sources.keys() {
@@ -48,12 +94,34 @@ impl Database {
         self.sources.keys().copied().collect()
     }
 
+    /// Returns aggregated Salsa event counters for observability.
+    pub fn salsa_event_snapshot(&self) -> SalsaEventSnapshot {
+        self.with_salsa_state_read(|state| state.db.event_snapshot())
+    }
+
+    /// Clears Salsa event counters.
+    pub fn reset_salsa_event_counters(&self) {
+        self.with_salsa_state(|state| state.db.reset_event_stats());
+    }
+
+    /// Requests cancellation of running Salsa computations.
+    pub fn trigger_salsa_cancellation(&self) {
+        self.with_salsa_state(|state| {
+            salsa::Database::trigger_cancellation(&mut state.db);
+        });
+    }
+
     /// Remove source text and cached query inputs for a file.
     pub fn remove_source_text(&mut self, file_id: FileId) {
-        self.sources.remove(&file_id);
-        salsa_backend::with_state(self.salsa_state_id, |state| {
+        if self.sources.remove(&file_id).is_none() {
+            return;
+        }
+
+        let new_revision = self.source_revision.fetch_add(1, Ordering::Relaxed) + 1;
+        self.with_salsa_state(|state| {
             state.sources.remove(&file_id);
             salsa_backend::sync_project_inputs(state);
+            state.synced_revision = new_revision;
         });
     }
 
@@ -82,51 +150,53 @@ impl Database {
     }
 
     fn analyze_salsa(&self, file_id: FileId) -> Arc<FileAnalysis> {
-        salsa_backend::with_state(self.salsa_state_id, |state| {
-            self.prepare_salsa_project(state);
-        });
+        let Some((db, project)) = self.with_synced_salsa_state(|state| {
+            state
+                .sources
+                .contains_key(&file_id)
+                .then_some((state.db.clone(), salsa_backend::project_inputs(state)))
+        }) else {
+            return Arc::new(FileAnalysis {
+                symbols: Arc::new(SymbolTable::default()),
+                diagnostics: Arc::new(Vec::new()),
+            });
+        };
 
-        salsa_backend::with_state_read(self.salsa_state_id, |state| {
-            if !state.sources.contains_key(&file_id) {
-                return Arc::new(FileAnalysis {
+        salsa::Cancelled::catch(|| salsa_backend::analyze_query(&db, project, file_id).clone())
+            .unwrap_or_else(|_| {
+                Arc::new(FileAnalysis {
                     symbols: Arc::new(SymbolTable::default()),
                     diagnostics: Arc::new(Vec::new()),
-                });
-            }
-
-            let project = salsa_backend::project_inputs(state);
-            salsa_backend::analyze_query(&state.db, project, file_id).clone()
-        })
+                })
+            })
     }
 
     fn diagnostics_salsa(&self, file_id: FileId) -> Arc<Vec<Diagnostic>> {
-        salsa_backend::with_state(self.salsa_state_id, |state| {
-            self.prepare_salsa_project(state);
-        });
+        let Some((db, project)) = self.with_synced_salsa_state(|state| {
+            state
+                .sources
+                .contains_key(&file_id)
+                .then_some((state.db.clone(), salsa_backend::project_inputs(state)))
+        }) else {
+            return Arc::new(Vec::new());
+        };
 
-        salsa_backend::with_state_read(self.salsa_state_id, |state| {
-            if !state.sources.contains_key(&file_id) {
-                return Arc::new(Vec::new());
-            }
-
-            let project = salsa_backend::project_inputs(state);
-            salsa_backend::diagnostics_query(&state.db, project, file_id).clone()
-        })
+        salsa::Cancelled::catch(|| salsa_backend::diagnostics_query(&db, project, file_id).clone())
+            .unwrap_or_else(|_| Arc::new(Vec::new()))
     }
 
     fn type_of_salsa(&self, file_id: FileId, expr_id: u32) -> TypeId {
-        salsa_backend::with_state(self.salsa_state_id, |state| {
-            self.prepare_salsa_project(state);
-        });
+        let Some((db, project)) = self.with_synced_salsa_state(|state| {
+            state
+                .sources
+                .contains_key(&file_id)
+                .then_some((state.db.clone(), salsa_backend::project_inputs(state)))
+        }) else {
+            return TypeId::UNKNOWN;
+        };
 
-        salsa_backend::with_state_read(self.salsa_state_id, |state| {
-            if !state.sources.contains_key(&file_id) {
-                return TypeId::UNKNOWN;
-            }
-
-            let project = salsa_backend::project_inputs(state);
-            salsa_backend::type_of_query(&state.db, project, file_id, expr_id)
-        })
+        salsa::Cancelled::catch(|| salsa_backend::type_of_query(&db, project, file_id, expr_id))
+            .unwrap_or(TypeId::UNKNOWN)
     }
 
     fn prepare_salsa_project(&self, state: &mut salsa_backend::SalsaState) {
@@ -184,33 +254,43 @@ impl SourceDatabase for Database {
     }
 
     fn set_source_text(&mut self, file_id: FileId, text: String) {
+        if self
+            .sources
+            .get(&file_id)
+            .is_some_and(|existing| existing.as_ref() == &text)
+        {
+            return;
+        }
+
         let text = Arc::new(text);
         self.sources.insert(file_id, text.clone());
+        let new_revision = self.source_revision.fetch_add(1, Ordering::Relaxed) + 1;
 
-        salsa_backend::with_state(self.salsa_state_id, |state| {
+        self.with_salsa_state(|state| {
+            let mut file_set_changed = state.project_inputs.is_none();
             if let Some(source) = state.sources.get(&file_id).copied() {
                 source.set_text(&mut state.db).to(text.as_ref().clone());
             } else {
                 let source = salsa_backend::SourceInput::new(&state.db, text.as_ref().clone());
                 state.sources.insert(file_id, source);
+                file_set_changed = true;
             }
-            salsa_backend::sync_project_inputs(state);
+            if file_set_changed {
+                salsa_backend::sync_project_inputs(state);
+            }
+            state.synced_revision = new_revision;
         });
     }
 }
 
 impl SemanticDatabase for Database {
     fn file_symbols(&self, file_id: FileId) -> Arc<SymbolTable> {
-        let source = salsa_backend::with_state(self.salsa_state_id, |state| {
-            self.source_input_for_file(state, file_id)
-        });
-        let Some(source) = source else {
+        let Some((db, source)) = self.source_handle_for_file(file_id) else {
             return Arc::new(SymbolTable::default());
         };
 
-        salsa_backend::with_state_read(self.salsa_state_id, |state| {
-            salsa_backend::file_symbols_query(&state.db, source).clone()
-        })
+        salsa::Cancelled::catch(|| salsa_backend::file_symbols_query(&db, source).clone())
+            .unwrap_or_else(|_| Arc::new(SymbolTable::default()))
     }
 
     fn resolve_name(&self, file_id: FileId, name: &str) -> Option<SymbolId> {
@@ -223,12 +303,16 @@ impl SemanticDatabase for Database {
     }
 
     fn expr_id_at_offset(&self, file_id: FileId, offset: u32) -> Option<u32> {
-        let source = self.source_text(file_id);
-        let parsed = parse(&source);
-        let root = parsed.syntax();
+        let (db, source) = self.source_handle_for_file(file_id)?;
 
-        let offset = TextSize::from(offset);
-        expression_id_at_offset(&root, offset)
+        salsa::Cancelled::catch(|| {
+            let green = salsa_backend::parse_green(&db, source).clone();
+            let root = SyntaxNode::new_root(green);
+            let offset = TextSize::from(offset);
+            expression_id_at_offset(&root, offset)
+        })
+        .ok()
+        .flatten()
     }
 
     fn diagnostics(&self, file_id: FileId) -> Arc<Vec<Diagnostic>> {
@@ -243,7 +327,10 @@ impl SemanticDatabase for Database {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use parking_lot::RwLock;
+    use std::sync::atomic::Ordering;
     use std::sync::Arc;
+    use std::thread;
 
     fn install_cross_file_fixture(db: &mut Database) -> (FileId, FileId) {
         let file_lib = FileId(10);
@@ -568,5 +655,263 @@ mod tests {
 
         assert!(db.source_text(file).contains("value : INT"));
         assert!(db.file_symbols(file).lookup_any("value").is_some());
+    }
+
+    #[test]
+    fn set_source_text_existing_file_skips_project_input_resync() {
+        let mut db = Database::new();
+        let file = FileId(32);
+        db.set_source_text(file, "PROGRAM Main\nEND_PROGRAM\n".to_string());
+        let sync_before = db.with_salsa_state_read(|state| state.project_sync_count);
+
+        db.set_source_text(
+            file,
+            "PROGRAM Main\nVAR\n    value : INT;\nEND_VAR\nvalue := 1;\nEND_PROGRAM\n".to_string(),
+        );
+        let sync_after = db.with_salsa_state_read(|state| state.project_sync_count);
+
+        assert_eq!(
+            sync_before, sync_after,
+            "editing existing file text should not rebuild project input membership"
+        );
+    }
+
+    #[test]
+    fn set_source_text_same_content_keeps_source_revision() {
+        let mut db = Database::new();
+        let file = FileId(33);
+        db.set_source_text(file, "PROGRAM Main\nEND_PROGRAM\n".to_string());
+        let before = db.source_revision.load(Ordering::Relaxed);
+
+        db.set_source_text(file, "PROGRAM Main\nEND_PROGRAM\n".to_string());
+        let after = db.source_revision.load(Ordering::Relaxed);
+
+        assert_eq!(
+            before, after,
+            "setting identical source content should not bump source revision"
+        );
+    }
+
+    #[test]
+    fn remove_missing_source_keeps_source_revision() {
+        let mut db = Database::new();
+        let before = db.source_revision.load(Ordering::Relaxed);
+
+        db.remove_source_text(FileId(34));
+        let after = db.source_revision.load(Ordering::Relaxed);
+
+        assert_eq!(
+            before, after,
+            "removing unknown source should not bump source revision"
+        );
+    }
+
+    #[test]
+    fn analyze_syncs_stale_salsa_state_revision() {
+        let mut db = Database::new();
+        let file = FileId(35);
+        db.set_source_text(file, "PROGRAM Main\nEND_PROGRAM\n".to_string());
+        let current = db.source_revision.load(Ordering::Relaxed);
+
+        db.with_salsa_state(|state| {
+            state.synced_revision = 0;
+        });
+
+        let _ = db.analyze_salsa(file);
+        let synced = db.with_salsa_state(|state| state.synced_revision);
+        assert_eq!(
+            synced, current,
+            "analyze should refresh stale salsa state to current source revision"
+        );
+    }
+
+    #[test]
+    fn expr_id_at_offset_returns_none_for_missing_file() {
+        let db = Database::new();
+        assert!(
+            db.expr_id_at_offset(FileId(36), 0).is_none(),
+            "missing files should not produce expression ids"
+        );
+    }
+
+    #[test]
+    fn expr_id_at_offset_tracks_updated_source() {
+        let mut db = Database::new();
+        let file = FileId(37);
+        db.set_source_text(
+            file,
+            "PROGRAM Main\nVAR\n    value : INT;\nEND_VAR\nvalue := 1;\nEND_PROGRAM\n".to_string(),
+        );
+
+        let old_offset = db
+            .source_text(file)
+            .find("1")
+            .expect("old literal should exist") as u32;
+        assert!(
+            db.expr_id_at_offset(file, old_offset).is_some(),
+            "initial source should resolve an expression id"
+        );
+
+        db.set_source_text(
+            file,
+            "PROGRAM Main\nVAR\n    value : INT;\nEND_VAR\nvalue := value + 2;\nEND_PROGRAM\n"
+                .to_string(),
+        );
+
+        let new_offset = db
+            .source_text(file)
+            .find("value + 2")
+            .expect("updated expression should exist") as u32;
+        assert!(
+            db.expr_id_at_offset(file, new_offset).is_some(),
+            "updated source should resolve expression ids from fresh parse cache"
+        );
+    }
+
+    #[test]
+    fn salsa_event_counters_emit_query_categories() {
+        let mut db = Database::new_with_salsa_observability();
+        let file = FileId(39);
+        db.set_source_text(
+            file,
+            "PROGRAM Main\nVAR\n    value : INT;\nEND_VAR\nvalue := value + 1;\nEND_PROGRAM\n"
+                .to_string(),
+        );
+
+        db.reset_salsa_event_counters();
+        let _ = db.file_symbols(file);
+        let first = db.salsa_event_snapshot();
+        assert!(
+            first.total > 0 && first.recomputes > 0,
+            "first query should emit observable execution events"
+        );
+
+        let _ = db.file_symbols(file);
+        let second = db.salsa_event_snapshot();
+        assert!(
+            second.total > first.total,
+            "second query should continue emitting events"
+        );
+        assert!(
+            second.cache_hits >= first.cache_hits,
+            "memoized query path should not decrease cache-hit counters"
+        );
+    }
+
+    #[test]
+    fn cancellation_requests_keep_queries_stable() {
+        let mut setup_db = Database::new_with_salsa_observability();
+        let file = FileId(40);
+        setup_db.set_source_text(
+            file,
+            "PROGRAM Main\nVAR\n    value : INT;\nEND_VAR\nvalue := value + 1;\nEND_PROGRAM\n"
+                .to_string(),
+        );
+        let db = Arc::new(setup_db);
+
+        let worker_db = Arc::clone(&db);
+        let worker = thread::spawn(move || {
+            for _ in 0..80 {
+                let _ = worker_db.analyze(file);
+                let _ = worker_db.diagnostics(file);
+            }
+        });
+
+        for _ in 0..80 {
+            db.trigger_salsa_cancellation();
+        }
+
+        worker
+            .join()
+            .expect("query worker should finish without panic");
+        let snapshot = db.salsa_event_snapshot();
+        assert!(
+            snapshot.cancellation_flags > 0,
+            "cancellation requests should emit cancellation event counters"
+        );
+    }
+
+    #[test]
+    fn concurrent_edit_and_query_loops_do_not_panic() {
+        let file = FileId(37);
+        let db = Arc::new(RwLock::new(Database::new()));
+        db.write().set_source_text(
+            file,
+            "PROGRAM Main\nVAR\n    value : INT;\nEND_VAR\nvalue := 0;\nEND_PROGRAM\n".to_string(),
+        );
+
+        let writer_db = Arc::clone(&db);
+        let writer = thread::spawn(move || {
+            for value in 0..120 {
+                writer_db.write().set_source_text(
+                    file,
+                    format!(
+                        "PROGRAM Main\nVAR\n    value : INT;\nEND_VAR\nvalue := {};\nEND_PROGRAM\n",
+                        value % 10
+                    ),
+                );
+            }
+        });
+
+        let mut readers = Vec::new();
+        for _ in 0..2 {
+            let reader_db = Arc::clone(&db);
+            readers.push(thread::spawn(move || {
+                for _ in 0..200 {
+                    let guard = reader_db.read();
+                    let analysis = guard.analyze(file);
+                    assert!(
+                        analysis
+                            .diagnostics
+                            .iter()
+                            .all(|diagnostic| !diagnostic.is_error()),
+                        "concurrent read path should remain stable while edits happen"
+                    );
+                    let source = guard.source_text(file);
+                    let offset = source.find("value :=").unwrap_or(0) as u32;
+                    let _ = guard.expr_id_at_offset(file, offset);
+                    let _ = guard.file_symbols(file);
+                    let _ = guard.diagnostics(file);
+                }
+            }));
+        }
+
+        writer.join().expect("writer thread should finish");
+        for reader in readers {
+            reader.join().expect("reader thread should finish");
+        }
+    }
+
+    #[test]
+    fn query_boundary_sequence_no_longer_panics() {
+        let mut db = Database::new();
+        let file = FileId(38);
+        db.set_source_text(
+            file,
+            "PROGRAM Main\nVAR\n    value : INT;\nEND_VAR\nvalue := 1;\nEND_PROGRAM\n".to_string(),
+        );
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            for value in 0..100 {
+                db.set_source_text(
+                    file,
+                    format!(
+                        "PROGRAM Main\nVAR\n    value : INT;\nEND_VAR\nvalue := {};\nEND_PROGRAM\n",
+                        value
+                    ),
+                );
+                let _ = db.file_symbols(file);
+                let _ = db.analyze(file);
+                let _ = db.diagnostics(file);
+                let source = db.source_text(file);
+                let offset = source.find("value :=").unwrap_or(0) as u32;
+                let _ = db.expr_id_at_offset(file, offset);
+            }
+        }));
+
+        assert!(
+            result.is_ok(),
+            "query boundary sequence should not panic after owned-state refactor"
+        );
     }
 }

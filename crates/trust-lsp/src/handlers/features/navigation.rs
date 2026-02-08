@@ -5,3 +5,5 @@ pub use super::core::{
 
 #[cfg(test)]
 pub use super::core::references;
+#[cfg(test)]
+pub(crate) use super::core::{references_with_ticket_for_tests, rename_with_ticket_for_tests};

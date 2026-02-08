@@ -24,4 +24,4 @@ mod diagnostics;
 mod queries;
 mod symbol_import;
 
-pub use queries::{Database, FileId, SemanticDatabase, SourceDatabase};
+pub use queries::{Database, FileId, SalsaEventSnapshot, SemanticDatabase, SourceDatabase};

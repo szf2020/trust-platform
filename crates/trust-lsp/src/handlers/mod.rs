@@ -18,6 +18,8 @@ mod workspace;
 #[cfg(test)]
 pub(crate) use commands::namespace_move_workspace_edit;
 pub use commands::{execute_command, MOVE_NAMESPACE_COMMAND, PROJECT_INFO_COMMAND};
+#[cfg(test)]
+pub(crate) use diagnostics::collect_diagnostics_with_ticket_for_tests;
 pub(crate) use diagnostics::{document_diagnostic, workspace_diagnostic};
 pub use features::{
     code_action, code_lens, completion, completion_resolve, document_highlight, document_link,
@@ -27,6 +29,12 @@ pub use features::{
     references_with_progress, rename, selection_range, semantic_tokens_full,
     semantic_tokens_full_delta, semantic_tokens_range, signature_help, type_hierarchy_subtypes,
     type_hierarchy_supertypes, workspace_symbol_with_progress,
+};
+#[cfg(test)]
+pub(crate) use features::{
+    code_action_with_ticket_for_tests, completion_with_ticket_for_tests,
+    references_with_ticket_for_tests, rename_with_ticket_for_tests,
+    workspace_symbol_with_ticket_for_tests,
 };
 pub use formatting::{formatting, on_type_formatting, range_formatting};
 pub use refresh::{refresh_diagnostics, refresh_semantic_tokens};

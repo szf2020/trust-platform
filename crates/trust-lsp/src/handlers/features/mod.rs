@@ -29,6 +29,14 @@ pub use symbols::{
 };
 
 #[cfg(test)]
+pub(crate) use completion::completion_with_ticket_for_tests;
+#[cfg(test)]
+pub(crate) use core::code_action_with_ticket_for_tests;
+#[cfg(test)]
 pub use navigation::references;
 #[cfg(test)]
+pub(crate) use navigation::{references_with_ticket_for_tests, rename_with_ticket_for_tests};
+#[cfg(test)]
 pub use symbols::workspace_symbol;
+#[cfg(test)]
+pub(crate) use symbols::workspace_symbol_with_ticket_for_tests;

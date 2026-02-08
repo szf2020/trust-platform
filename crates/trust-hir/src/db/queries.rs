@@ -1,9 +1,13 @@
 use super::*;
+use parking_lot::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 mod collector;
 mod database;
 mod helpers;
 mod salsa_backend;
+
+pub use salsa_backend::SalsaEventSnapshot;
 
 pub(super) use helpers::{
     collect_program_instances, implements_clause_names, name_from_node, normalize_member_name,
@@ -49,7 +53,8 @@ pub trait SemanticDatabase: SourceDatabase {
 /// The main database struct.
 pub struct Database {
     sources: FxHashMap<FileId, Arc<String>>,
-    salsa_state_id: u64,
+    salsa_state: Mutex<salsa_backend::SalsaState>,
+    source_revision: AtomicU64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,23 +67,36 @@ impl Default for Database {
     fn default() -> Self {
         Self {
             sources: FxHashMap::default(),
-            salsa_state_id: salsa_backend::allocate_state_id(),
+            salsa_state: Mutex::new(salsa_backend::SalsaState::default()),
+            source_revision: AtomicU64::new(1),
+        }
+    }
+}
+
+#[cfg(test)]
+impl Database {
+    pub(crate) fn new_with_salsa_observability() -> Self {
+        Self {
+            sources: FxHashMap::default(),
+            salsa_state: Mutex::new(salsa_backend::SalsaState::with_event_observability(
+                true, false,
+            )),
+            source_revision: AtomicU64::new(1),
         }
     }
 }
 
 impl std::fmt::Debug for Database {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state = self.salsa_state.lock();
         f.debug_struct("Database")
             .field("sources", &self.sources.len())
-            .field("salsa_state_id", &self.salsa_state_id)
+            .field("salsa_sources", &state.sources.len())
+            .field(
+                "source_revision",
+                &self.source_revision.load(Ordering::Relaxed),
+            )
             .finish()
-    }
-}
-
-impl Drop for Database {
-    fn drop(&mut self) {
-        salsa_backend::remove_state(self.salsa_state_id);
     }
 }
 

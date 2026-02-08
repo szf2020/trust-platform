@@ -14,9 +14,10 @@ title truST HIR: Symbol Collection & Type System
 ' ============================================================
 package "Database Layer" as dbLayer #LightGreen {
 
-    class "Database" as db <<db/queries.rs:46-50>> {
+    class "Database" as db <<db/queries.rs>> {
         sources: FxHashMap<FileId, Arc<String>>
-        salsa_state_id: u64
+        salsa_state: Mutex<SalsaState>
+        source_revision: AtomicU64
         --
         +new() → Database
         +set_source_text(file_id, text)
@@ -39,6 +40,12 @@ package "Database Layer" as dbLayer #LightGreen {
         Any source change syncs inputs,
         invalidating affected queries
         through Salsa dependency tracking.
+
+        Observability/cancellation:
+        - `TRUST_HIR_SALSA_EVENT_METRICS=1`
+        - `TRUST_HIR_SALSA_EVENT_LOG=1`
+        - cooperative cancellation checkpoints
+          in tracked query hot paths.
     end note
 }
 

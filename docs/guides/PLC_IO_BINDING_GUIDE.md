@@ -19,6 +19,18 @@ END_VAR
 - `%I` = input, `%Q` = output, `%M` = memory
 - `X` = bit address (use for GPIO and discrete I/O)
 
+Marker (`%M`) address variants:
+- `%MX<byte>.<bit>` (bit, BOOL), example: `%MX0.7`
+- `%MB<byte>` (byte), example: `%MB12`
+- `%MW<byte>` (word), example: `%MW50`
+- `%MD<byte>` (double word), example: `%MD200`
+- `%ML<byte>` (long word), example: `%ML8`
+- `%M*` (wildcard, resolved by `VAR_CONFIG`)
+
+Runtime cycle semantics for `%M` bindings:
+- Cycle start: `%M` process image is read into bound variables.
+- Cycle end: bound variable values are written back to `%M` process image.
+
 ## 2) io.toml Structure (v1)
 
 Single-driver form (legacy + still supported):
