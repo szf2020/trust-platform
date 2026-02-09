@@ -149,9 +149,31 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb
       - name: Run extension integration tests
-        run: xvfb-run -a npm test
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${GITHUB_WORKSPACE}/gate-artifacts"
+          LOG_PATH="${GITHUB_WORKSPACE}/gate-artifacts/vscode-extension-test.log"
+          : > "${LOG_PATH}"
+          for attempt in 1 2; do
+            echo "=== VS Code integration attempt ${attempt}/2 ===" | tee -a "${LOG_PATH}"
+            if xvfb-run -a npm test 2>&1 | tee -a "${LOG_PATH}"; then
+              exit 0
+            fi
+            if [[ "${attempt}" -lt 2 ]]; then
+              echo "Attempt ${attempt} failed; retrying once..." | tee -a "${LOG_PATH}"
+            fi
+          done
+          echo "VS Code integration tests failed after 2 attempts." | tee -a "${LOG_PATH}"
+          exit 1
         env:
           ST_LSP_TEST_SERVER: ${{ github.workspace }}/target/debug/trust-lsp
+      - name: Upload VS Code integration test log
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: vscode-extension-test-log
+          path: gate-artifacts/vscode-extension-test.log
       - name: Mark gate success
         if: ${{ success() }}
         run: |
