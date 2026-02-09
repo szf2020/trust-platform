@@ -1,4 +1,19 @@
 use super::*;
+use std::path::Path;
+
+fn normalize_path_for_assert(path: &Path) -> String {
+    #[cfg(windows)]
+    {
+        path.to_string_lossy()
+            .replace('\\', "/")
+            .trim_start_matches("//?/")
+            .to_ascii_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_string_lossy().into_owned()
+    }
+}
 
 #[test]
 fn lsp_hover_variable() {
@@ -798,14 +813,16 @@ END_FUNCTION
         .join("sources/vendor.st")
         .canonicalize()
         .expect("dep source");
+    let dep_source_norm = normalize_path_for_assert(&dep_source);
     let found_dependency_symbol = symbols.iter().any(|symbol| {
-        symbol.name == "VendorDouble"
-            && symbol
-                .location
-                .uri
-                .to_file_path()
-                .ok()
-                .is_some_and(|path| path == dep_source)
+        if symbol.name != "VendorDouble" {
+            return false;
+        }
+        let Some(path) = symbol.location.uri.to_file_path().ok() else {
+            return false;
+        };
+        let path = path.canonicalize().unwrap_or(path);
+        normalize_path_for_assert(&path) == dep_source_norm
     });
     assert!(
         found_dependency_symbol,

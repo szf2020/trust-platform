@@ -1750,6 +1750,10 @@ version = "2.0.0"
         (rev_v1, rev_v2)
     }
 
+    fn toml_git_source(path: &Path) -> String {
+        path.to_string_lossy().replace('\\', "/")
+    }
+
     #[test]
     fn loads_project_config_with_includes_and_libraries() {
         let root = temp_dir("trustlsp-config");
@@ -1998,6 +2002,7 @@ Versioned = { path = "deps/versioned", version = "1.0.0" }
         let root = temp_dir("trustlsp-config-git-pins");
         let repo = root.join("repos/vendor");
         let (rev_v1, _rev_v2) = init_dependency_repo(&repo);
+        let repo_source = toml_git_source(&repo);
 
         fs::write(
             root.join("trust-lsp.toml"),
@@ -2008,7 +2013,7 @@ ByRev = {{ git = "{repo}", rev = "{rev}" }}
 ByTag = {{ git = "{repo}", tag = "v1" }}
 ByBranch = {{ git = "{repo}", branch = "stable" }}
 "#,
-                repo = repo.to_string_lossy(),
+                repo = repo_source,
                 rev = rev_v1
             ),
         )
@@ -2045,6 +2050,7 @@ ByBranch = {{ git = "{repo}", branch = "stable" }}
         let root = temp_dir("trustlsp-config-git-locked");
         let repo = root.join("repos/vendor");
         let _ = init_dependency_repo(&repo);
+        let repo_source = toml_git_source(&repo);
 
         fs::write(
             root.join("trust-lsp.toml"),
@@ -2056,7 +2062,7 @@ dependencies_locked = true
 [dependencies]
 Floating = {{ git = "{repo}" }}
 "#,
-                repo = repo.to_string_lossy()
+                repo = repo_source
             ),
         )
         .expect("write root config");
@@ -2075,13 +2081,14 @@ Floating = {{ git = "{repo}" }}
         let root = temp_dir("trustlsp-config-git-offline");
         let repo = root.join("repos/vendor");
         let _ = init_dependency_repo(&repo);
+        let repo_source = toml_git_source(&repo);
 
         let initial_config = format!(
             r#"
 [dependencies]
 Floating = {{ git = "{repo}" }}
 "#,
-            repo = repo.to_string_lossy()
+            repo = repo_source
         );
         fs::write(root.join("trust-lsp.toml"), initial_config).expect("write initial config");
         let first = ProjectConfig::load(&root);
@@ -2102,7 +2109,7 @@ dependencies_offline = true
 [dependencies]
 Floating = {{ git = "{repo}" }}
 "#,
-                repo = repo.to_string_lossy()
+                repo = repo_source
             ),
         )
         .expect("write offline config");
