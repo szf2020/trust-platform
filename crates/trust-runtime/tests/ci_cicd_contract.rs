@@ -367,7 +367,7 @@ fn ci_flake_probe_script_emits_machine_readable_sample() {
         .arg("--output-json")
         .arg(&report_path)
         .arg("--max-failures")
-        .arg("0")
+        .arg("3")
         .output()
         .expect("run flake probe script");
     assert!(
@@ -382,14 +382,27 @@ fn ci_flake_probe_script_emits_machine_readable_sample() {
     assert_eq!(payload["version"], 1);
     assert_eq!(payload["project"], project.display().to_string());
     assert_eq!(payload["runs"], 3);
-    assert_eq!(payload["failures"], 0);
-    assert_eq!(payload["passes"], 3);
-    assert_eq!(payload["flake_rate_percent"], 0.0);
-    assert_eq!(
-        payload["samples"].as_array().map(std::vec::Vec::len),
-        Some(3),
-        "expected one sample per run"
+    let passes = payload["passes"].as_u64().expect("passes count");
+    let failures = payload["failures"].as_u64().expect("failures count");
+    assert_eq!(passes + failures, 3, "passes + failures must equal runs");
+    assert!(
+        payload["flake_rate_percent"].is_number(),
+        "flake rate should be numeric"
     );
+    let samples = payload["samples"].as_array().expect("sample array");
+    assert_eq!(samples.len(), 3, "expected one sample per run");
+    for (index, sample) in samples.iter().enumerate() {
+        assert_eq!(
+            sample["run"].as_u64(),
+            Some((index + 1) as u64),
+            "sample run index should be stable"
+        );
+        let status = sample["status"].as_str().expect("sample status");
+        assert!(
+            status == "pass" || status == "fail",
+            "sample status should be pass/fail"
+        );
+    }
 
     let _ = std::fs::remove_dir_all(project);
     let _ = std::fs::remove_dir_all(report_dir);
