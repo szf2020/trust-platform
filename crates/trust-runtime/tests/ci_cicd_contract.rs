@@ -1,16 +1,46 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(1);
+
 fn unique_temp_dir(prefix: &str) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time before unix epoch")
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "trust-runtime-{prefix}-{}-{nanos}",
-        std::process::id()
-    ))
+    for _ in 0..64 {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let seq = TEMP_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "trust-runtime-{prefix}-{}-{nanos}-{seq}",
+            std::process::id()
+        ));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => return dir,
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => panic!("create temp fixture dir {}: {err}", dir.display()),
+        }
+    }
+    panic!("failed to allocate unique temp dir for fixture '{prefix}'")
+}
+
+fn copy_file_with_retry(src_path: &Path, dst_path: &Path) {
+    for attempt in 0..5 {
+        match std::fs::copy(src_path, dst_path) {
+            Ok(_) => return,
+            Err(err) if cfg!(windows) && err.raw_os_error() == Some(32) && attempt < 4 => {
+                // Windows runners can briefly lock files while tests run in parallel.
+                std::thread::sleep(Duration::from_millis(20 * (attempt + 1)));
+            }
+            Err(err) => panic!(
+                "copy fixture file {} -> {}: {err}",
+                src_path.display(),
+                dst_path.display()
+            ),
+        }
+    }
+    unreachable!("copy_file_with_retry exhausted retries")
 }
 
 fn fixture_root(name: &str) -> PathBuf {
@@ -34,7 +64,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) {
         if src_path.is_dir() {
             copy_dir_recursive(&src_path, &dst_path);
         } else {
-            std::fs::copy(&src_path, &dst_path).expect("copy fixture file");
+            copy_file_with_retry(&src_path, &dst_path);
         }
     }
 }

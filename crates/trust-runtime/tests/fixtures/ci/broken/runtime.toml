@@ -6,7 +6,7 @@ name = "Res"
 cycle_interval_ms = 100
 
 [runtime.control]
-endpoint = "unix:///tmp/trust-runtime-ci-broken.sock"
+endpoint = "tcp://127.0.0.1:0"
 auth_token = "trust-ci-token"
 
 [runtime.log]
