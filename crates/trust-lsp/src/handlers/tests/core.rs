@@ -803,27 +803,37 @@ END_FUNCTION
         index_workspace(&client, &state).await;
     });
 
-    let params = tower_lsp::lsp_types::WorkspaceSymbolParams {
-        query: "VendorDouble".to_string(),
-        work_done_progress_params: Default::default(),
-        partial_result_params: Default::default(),
-    };
-    let symbols = workspace_symbol(&state, params).expect("workspace symbols");
     let dep_source = dep
         .join("sources/vendor.st")
         .canonicalize()
         .expect("dep source");
     let dep_source_norm = normalize_path_for_assert(&dep_source);
-    let found_dependency_symbol = symbols.iter().any(|symbol| {
-        if symbol.name != "VendorDouble" {
-            return false;
+    let mut found_dependency_symbol = false;
+    for _ in 0..40 {
+        let symbols = workspace_symbol(
+            &state,
+            tower_lsp::lsp_types::WorkspaceSymbolParams {
+                query: "VendorDouble".to_string(),
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+            },
+        )
+        .expect("workspace symbols");
+        found_dependency_symbol = symbols.iter().any(|symbol| {
+            if symbol.name != "VendorDouble" {
+                return false;
+            }
+            let Some(path) = symbol.location.uri.to_file_path().ok() else {
+                return false;
+            };
+            let path = path.canonicalize().unwrap_or(path);
+            normalize_path_for_assert(&path) == dep_source_norm
+        });
+        if found_dependency_symbol {
+            break;
         }
-        let Some(path) = symbol.location.uri.to_file_path().ok() else {
-            return false;
-        };
-        let path = path.canonicalize().unwrap_or(path);
-        normalize_path_for_assert(&path) == dep_source_norm
-    });
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
     assert!(
         found_dependency_symbol,
         "expected dependency symbol to be indexed"

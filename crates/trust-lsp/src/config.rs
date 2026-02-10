@@ -1688,6 +1688,7 @@ enum DependencyVisitState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lsp_types::Url;
     use std::fs;
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1751,7 +1752,10 @@ version = "2.0.0"
     }
 
     fn toml_git_source(path: &Path) -> String {
-        path.to_string_lossy().replace('\\', "/")
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        Url::from_file_path(&canonical)
+            .map(|url| url.to_string())
+            .unwrap_or_else(|_| canonical.to_string_lossy().replace('\\', "/"))
     }
 
     #[test]
