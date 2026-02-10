@@ -6,7 +6,7 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 
 ## [Unreleased]
 
-Target release: `v0.4.0`
+Target release: `v0.4.1`
 
 ### Added
 
@@ -54,6 +54,8 @@ Target release: `v0.4.0`
 
 ### Fixed
 
+- Release packaging metadata:
+  - VS Code extension package versions are now aligned to `0.4.1` to avoid duplicate publish artifacts from prior extension versions.
 - `%MW` memory marker force/write synchronization in runtime I/O panel flow.
 - Debug adapter force latch behavior and state-lock interaction.
 - Debug runner now respects configured task interval pacing.
