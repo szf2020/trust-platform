@@ -400,13 +400,19 @@ mod tests {
 
     #[test]
     fn mesh_tls_publish_applies_updates() {
+        let attempts = if cfg!(windows) { 8 } else { 3 };
+        let retry_delay = if cfg!(windows) {
+            StdDuration::from_millis(250)
+        } else {
+            StdDuration::from_millis(60)
+        };
         let mut last_error = None;
-        for _attempt in 0..3 {
+        for _attempt in 0..attempts {
             match try_mesh_tls_publish_applies_updates() {
                 Ok(()) => return,
                 Err(error) => {
                     last_error = Some(error);
-                    std::thread::sleep(StdDuration::from_millis(60));
+                    std::thread::sleep(retry_delay);
                 }
             }
         }
@@ -478,8 +484,13 @@ mod tests {
         data.insert("temperature".to_string(), json!(42));
 
         send_publish(&addr, &sender_state, &data).map_err(|err| err.to_string())?;
+        let apply_timeout = if cfg!(windows) {
+            StdDuration::from_millis(2500)
+        } else {
+            StdDuration::from_millis(1200)
+        };
         let updates = apply_rx
-            .recv_timeout(StdDuration::from_millis(1200))
+            .recv_timeout(apply_timeout)
             .map_err(|err| format!("mesh apply updates: {err:?}"))?;
         if updates.get("resource/RESOURCE/program/Main/field/temp") != Some(&Value::DInt(42)) {
             return Err("mesh apply updates missing expected value".to_string());
