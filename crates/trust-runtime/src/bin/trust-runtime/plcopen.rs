@@ -35,28 +35,59 @@ pub fn run_plcopen(action: PlcopenAction) -> anyhow::Result<()> {
             for item in &profile.unsupported_nodes {
                 println!(" - {item}");
             }
+            println!("Compatibility matrix:");
+            for entry in &profile.compatibility_matrix {
+                println!(
+                    " - [{}] {}: {}",
+                    entry.status, entry.capability, entry.notes
+                );
+            }
+            println!("Round-trip limits:");
+            for item in &profile.round_trip_limits {
+                println!(" - {item}");
+            }
+            println!("Known gaps:");
+            for item in &profile.known_gaps {
+                println!(" - {item}");
+            }
             Ok(())
         }
-        PlcopenAction::Export { project, output } => run_export(project, output),
-        PlcopenAction::Import { input, project } => run_import(input, project),
+        PlcopenAction::Export {
+            project,
+            output,
+            json,
+        } => run_export(project, output, json),
+        PlcopenAction::Import {
+            input,
+            project,
+            json,
+        } => run_import(input, project, json),
     }
 }
 
-fn run_export(project: Option<PathBuf>, output: Option<PathBuf>) -> anyhow::Result<()> {
+fn run_export(project: Option<PathBuf>, output: Option<PathBuf>, json: bool) -> anyhow::Result<()> {
     let project_root = resolve_project(project)?;
     let output_path = output.unwrap_or_else(|| project_root.join("interop").join("plcopen.xml"));
     let report = export_project_to_xml(&project_root, &output_path)?;
-    print_export_report(&report);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        print_export_report(&report);
+    }
     Ok(())
 }
 
-fn run_import(input: PathBuf, project: Option<PathBuf>) -> anyhow::Result<()> {
+fn run_import(input: PathBuf, project: Option<PathBuf>, json: bool) -> anyhow::Result<()> {
     let project_root = resolve_project(project)?;
     if !input.is_file() {
         anyhow::bail!("input PLCopen file '{}' does not exist", input.display());
     }
     let report = import_xml_to_project(&input, &project_root)?;
-    print_import_report(&report);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        print_import_report(&report);
+    }
     Ok(())
 }
 
@@ -106,6 +137,14 @@ fn print_import_report(report: &PlcopenImportReport) {
     );
     println!("Detected ecosystem: {}", report.detected_ecosystem);
     println!(
+        "Compatibility coverage: {:.2}% (supported={}, partial={}, unsupported={}, verdict={})",
+        report.compatibility_coverage.support_percent,
+        report.compatibility_coverage.supported_items,
+        report.compatibility_coverage.partial_items,
+        report.compatibility_coverage.unsupported_items,
+        report.compatibility_coverage.verdict
+    );
+    println!(
         "Migration report: {}",
         report.migration_report_path.display()
     );
@@ -123,6 +162,40 @@ fn print_import_report(report: &PlcopenImportReport) {
                 report.unsupported_nodes.len()
             ))
         );
+    }
+    if !report.unsupported_diagnostics.is_empty() {
+        println!(
+            "{}",
+            style::warning(format!(
+                "{} structured compatibility diagnostic(s):",
+                report.unsupported_diagnostics.len()
+            ))
+        );
+        for diagnostic in report.unsupported_diagnostics.iter().take(10) {
+            if let Some(pou) = &diagnostic.pou {
+                println!(
+                    " - {} {} [{}] pou={}: {} ({})",
+                    diagnostic.severity,
+                    diagnostic.code,
+                    diagnostic.node,
+                    pou,
+                    diagnostic.message,
+                    diagnostic.action
+                );
+            } else {
+                println!(
+                    " - {} {} [{}]: {} ({})",
+                    diagnostic.severity,
+                    diagnostic.code,
+                    diagnostic.node,
+                    diagnostic.message,
+                    diagnostic.action
+                );
+            }
+        }
+        if report.unsupported_diagnostics.len() > 10 {
+            println!(" - ... +{}", report.unsupported_diagnostics.len() - 10);
+        }
     }
     if !report.warnings.is_empty() {
         println!(

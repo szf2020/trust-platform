@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -10,6 +11,14 @@ fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
         "trust-runtime-{prefix}-{}-{nanos}",
         std::process::id()
     ))
+}
+
+fn fixture_path(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("plcopen")
+        .join(name)
 }
 
 fn pou_signatures(xml_text: &str) -> Vec<(String, String, String)> {
@@ -67,6 +76,19 @@ fn plcopen_profile_json_emits_contract() {
             .expect("profile"),
         "trust-st-strict-v1"
     );
+    assert!(value["compatibility_matrix"]
+        .as_array()
+        .expect("compatibility matrix")
+        .iter()
+        .any(|entry| entry["status"] == "supported"));
+    assert!(!value["round_trip_limits"]
+        .as_array()
+        .expect("round trip limits")
+        .is_empty());
+    assert!(!value["known_gaps"]
+        .as_array()
+        .expect("known gaps")
+        .is_empty());
 }
 
 #[test]
@@ -195,6 +217,76 @@ END_FUNCTION_BLOCK
 
     let _ = std::fs::remove_dir_all(source_project);
     let _ = std::fs::remove_dir_all(imported_project);
+}
+
+#[test]
+fn plcopen_export_import_json_reports_include_compatibility_diagnostics() {
+    let project = unique_temp_dir("plcopen-cli-json-report");
+    std::fs::create_dir_all(project.join("sources")).expect("create sources");
+    std::fs::write(
+        project.join("sources/main.st"),
+        r#"
+PROGRAM Main
+END_PROGRAM
+"#,
+    )
+    .expect("write source");
+
+    let output_xml = project.join("out/plcopen.json.xml");
+    let export = Command::new(env!("CARGO_BIN_EXE_trust-runtime"))
+        .args([
+            "plcopen",
+            "export",
+            "--project",
+            project.to_str().expect("project utf-8"),
+            "--output",
+            output_xml.to_str().expect("output utf-8"),
+            "--json",
+        ])
+        .output()
+        .expect("run plcopen export json");
+    assert!(
+        export.status.success(),
+        "expected export json success, stderr was:\n{}",
+        String::from_utf8_lossy(&export.stderr)
+    );
+    let export_json: serde_json::Value =
+        serde_json::from_slice(&export.stdout).expect("parse export JSON report");
+    assert_eq!(export_json["pou_count"], 1);
+    assert_eq!(export_json["source_count"], 1);
+    assert!(export_json["source_map_path"].is_string());
+
+    let import_project = unique_temp_dir("plcopen-cli-json-import");
+    let fixture = fixture_path("codesys.xml");
+    let import = Command::new(env!("CARGO_BIN_EXE_trust-runtime"))
+        .args([
+            "plcopen",
+            "import",
+            "--input",
+            fixture.to_str().expect("fixture utf-8"),
+            "--project",
+            import_project.to_str().expect("import project utf-8"),
+            "--json",
+        ])
+        .output()
+        .expect("run plcopen import json");
+    assert!(
+        import.status.success(),
+        "expected import json success, stderr was:\n{}",
+        String::from_utf8_lossy(&import.stderr)
+    );
+    let import_json: serde_json::Value =
+        serde_json::from_slice(&import.stdout).expect("parse import JSON report");
+    assert_eq!(import_json["detected_ecosystem"], "codesys");
+    assert_eq!(import_json["compatibility_coverage"]["verdict"], "partial");
+    assert!(import_json["unsupported_diagnostics"]
+        .as_array()
+        .expect("unsupported diagnostics array")
+        .iter()
+        .any(|entry| entry["code"] == "PLCO203"));
+
+    let _ = std::fs::remove_dir_all(project);
+    let _ = std::fs::remove_dir_all(import_project);
 }
 
 #[test]

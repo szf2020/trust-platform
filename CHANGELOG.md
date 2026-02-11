@@ -6,10 +6,15 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 
 ## [Unreleased]
 
-Target release: `v0.4.1`
+Target release: `v0.5.0`
 
 ### Added
 
+- PLCopen Interop Hardening (Deliverable 2):
+  - expanded migration fixture coverage for major ecosystems (`codesys`, `beckhoff-twincat`, `siemens-tia`, `rockwell-studio5000`, `schneider-ecostruxure`)
+  - structured unsupported-node diagnostics in migration reports with code/severity/node/action metadata
+  - explicit compatibility coverage summary in import/migration reports (`supported_items`, `partial_items`, `unsupported_items`, `support_percent`, `verdict`)
+  - dedicated compatibility/limits guide: `docs/guides/PLCOPEN_INTEROP_COMPATIBILITY.md`
 - Conformance Suite MVP shipped (Deliverable 1):
   - deterministic case pack + versioned expected artifacts in `conformance/cases/` and `conformance/expected/`
   - coverage for timers (TON/TOF/TP), edges, scan-cycle ordering, init/reset, arithmetic corner cases, and mapped memory behavior
@@ -41,6 +46,8 @@ Target release: `v0.4.1`
 
 ### Changed
 
+- `trust-runtime plcopen export` and `trust-runtime plcopen import` now support `--json` for machine-readable report output.
+- `trust-runtime plcopen profile` now publishes a compatibility matrix plus round-trip limits/known-gaps contract fields.
 - Migrated `trust-hir` semantic path to Salsa-only backend and upgraded Salsa to `0.26`.
 - Enabled VS Code extension integration tests in CI under virtual display (`xvfb`).
 - Expanded cancellation checks in workspace-scale LSP operations.
@@ -54,6 +61,7 @@ Target release: `v0.4.1`
 
 ### Fixed
 
+- Schneider EcoStruxure vendor detection is now distinct from generic CODESYS-family heuristics in PLCopen migration reports.
 - Release packaging metadata:
   - VS Code extension package versions are now aligned to `0.4.1` to avoid duplicate publish artifacts from prior extension versions.
 - `%MW` memory marker force/write synchronization in runtime I/O panel flow.

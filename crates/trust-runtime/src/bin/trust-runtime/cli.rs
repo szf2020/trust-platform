@@ -322,6 +322,9 @@ pub enum PlcopenAction {
         /// Output XML file path (defaults to <project>/interop/plcopen.xml).
         #[arg(long = "output")]
         output: Option<PathBuf>,
+        /// Print machine-readable JSON report.
+        #[arg(long, action = ArgAction::SetTrue)]
+        json: bool,
     },
     /// Import PLCopen XML into project sources.
     Import {
@@ -331,6 +334,9 @@ pub enum PlcopenAction {
         /// Project folder directory (defaults to auto-detect or current directory).
         #[arg(long = "project", alias = "bundle")]
         project: Option<PathBuf>,
+        /// Print machine-readable JSON report.
+        #[arg(long, action = ArgAction::SetTrue)]
+        json: bool,
     },
 }
 
@@ -522,14 +528,49 @@ mod tests {
             "project",
             "--output",
             "out.xml",
+            "--json",
         ]);
         match cli.command.expect("command") {
             Command::Plcopen { action } => match action {
-                PlcopenAction::Export { project, output } => {
+                PlcopenAction::Export {
+                    project,
+                    output,
+                    json,
+                } => {
                     assert_eq!(project, Some(PathBuf::from("project")));
                     assert_eq!(output, Some(PathBuf::from("out.xml")));
+                    assert!(json);
                 }
                 other => panic!("expected plcopen export action, got {other:?}"),
+            },
+            other => panic!("expected plcopen command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_plcopen_import_command() {
+        let cli = Cli::parse_from([
+            "trust-runtime",
+            "plcopen",
+            "import",
+            "--input",
+            "interop/plcopen.xml",
+            "--project",
+            "project",
+            "--json",
+        ]);
+        match cli.command.expect("command") {
+            Command::Plcopen { action } => match action {
+                PlcopenAction::Import {
+                    input,
+                    project,
+                    json,
+                } => {
+                    assert_eq!(input, PathBuf::from("interop/plcopen.xml"));
+                    assert_eq!(project, Some(PathBuf::from("project")));
+                    assert!(json);
+                }
+                other => panic!("expected plcopen import action, got {other:?}"),
             },
             other => panic!("expected plcopen command, got {other:?}"),
         }

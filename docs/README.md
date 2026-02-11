@@ -19,6 +19,12 @@ Conformance scope, naming rules, and summary-contract artifacts are in
 `conformance/README.md`.
 External comparison guidance is in `conformance/external-run-guide.md`.
 
+## PLCopen Interop
+
+PLCopen compatibility matrix, migration diagnostics contract, round-trip limits,
+and known gaps are documented in:
+`docs/guides/PLCOPEN_INTEROP_COMPATIBILITY.md`.
+
 ## Diagram Maintenance
 
 Use the helper scripts to keep PlantUML diagrams in sync:

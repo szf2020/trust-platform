@@ -25,8 +25,11 @@ pub struct PlcopenProfile {
     pub version: &'static str,
     pub strict_subset: Vec<&'static str>,
     pub unsupported_nodes: Vec<&'static str>,
+    pub compatibility_matrix: Vec<PlcopenCompatibilityMatrixEntry>,
     pub source_mapping: &'static str,
     pub vendor_extension_hook: &'static str,
+    pub round_trip_limits: Vec<&'static str>,
+    pub known_gaps: Vec<&'static str>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -51,6 +54,8 @@ pub struct PlcopenImportReport {
     pub source_coverage_percent: f64,
     pub semantic_loss_percent: f64,
     pub detected_ecosystem: String,
+    pub compatibility_coverage: PlcopenCompatibilityCoverage,
+    pub unsupported_diagnostics: Vec<PlcopenUnsupportedDiagnostic>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -66,7 +71,9 @@ pub struct PlcopenMigrationReport {
     pub skipped_pous: usize,
     pub source_coverage_percent: f64,
     pub semantic_loss_percent: f64,
+    pub compatibility_coverage: PlcopenCompatibilityCoverage,
     pub unsupported_nodes: Vec<String>,
+    pub unsupported_diagnostics: Vec<PlcopenUnsupportedDiagnostic>,
     pub warnings: Vec<String>,
     pub entries: Vec<PlcopenMigrationEntry>,
 }
@@ -78,6 +85,33 @@ pub struct PlcopenMigrationEntry {
     pub resolved_pou_type: Option<String>,
     pub status: String,
     pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlcopenCompatibilityMatrixEntry {
+    pub capability: &'static str,
+    pub status: &'static str,
+    pub notes: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlcopenCompatibilityCoverage {
+    pub supported_items: usize,
+    pub partial_items: usize,
+    pub unsupported_items: usize,
+    pub support_percent: f64,
+    pub verdict: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlcopenUnsupportedDiagnostic {
+    pub code: String,
+    pub severity: String,
+    pub node: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pou: Option<String>,
+    pub action: String,
 }
 
 #[derive(Debug, Clone)]
@@ -158,9 +192,53 @@ pub fn supported_profile() -> PlcopenProfile {
             "graphical bodies (FBD/LD/SFC)",
             "vendor-specific nodes (preserved via hooks, not interpreted)",
         ],
+        compatibility_matrix: vec![
+            PlcopenCompatibilityMatrixEntry {
+                capability: "POU import/export: PROGRAM/FUNCTION/FUNCTION_BLOCK with ST body",
+                status: "supported",
+                notes: "Aliases such as PRG/FC/FB are normalized on import.",
+            },
+            PlcopenCompatibilityMatrixEntry {
+                capability: "Source mapping metadata",
+                status: "supported",
+                notes: "Embedded addData trust.sourceMap + deterministic source-map sidecar JSON.",
+            },
+            PlcopenCompatibilityMatrixEntry {
+                capability: "Vendor extension node preservation",
+                status: "partial",
+                notes: "Unknown addData/vendor fragments are preserved and re-injectable, but not semantically interpreted.",
+            },
+            PlcopenCompatibilityMatrixEntry {
+                capability: "Vendor ecosystem migration heuristics",
+                status: "partial",
+                notes: "Detected ecosystems are advisory diagnostics for migration workflows, not semantic guarantees.",
+            },
+            PlcopenCompatibilityMatrixEntry {
+                capability: "Graphical bodies (FBD/LD/SFC) and project-level runtime resources",
+                status: "unsupported",
+                notes: "Strict subset is ST-only and does not import graphical networks/configuration/resource execution models.",
+            },
+            PlcopenCompatibilityMatrixEntry {
+                capability: "Vendor libraries, type systems, and platform-specific pragmas",
+                status: "unsupported",
+                notes: "Unsupported content is reported in migration diagnostics and known-gaps docs.",
+            },
+        ],
         source_mapping: "Export writes deterministic source-map sidecar JSON and embeds trust.sourceMap in addData.",
         vendor_extension_hook:
             "Import preserves unknown addData/vendor nodes to plcopen.vendor-extensions.imported.xml; export re-injects plcopen.vendor-extensions.xml.",
+        round_trip_limits: vec![
+            "Round-trip guarantees preserve ST POU signatures (name/type/body intent) for strict-subset inputs.",
+            "Round-trip does not preserve vendor formatting/layout, graphical networks, or runtime deployment metadata.",
+            "Round-trip can rename output source files to sanitized unique names inside sources/.",
+            "Round-trip preserves unknown vendor addData as opaque fragments, not executable semantics.",
+        ],
+        known_gaps: vec![
+            "No import/export for SFC/LD/FBD bodies.",
+            "No import of PLCopen instances/configurations/resources into runtime scheduling model.",
+            "No semantic translation for vendor-specific standard libraries and AOI/FB variants.",
+            "No guaranteed equivalence for vendor pragmas, safety metadata, or online deployment tags.",
+        ],
     }
 }
 
@@ -331,6 +409,7 @@ pub fn import_xml_to_project(
 
     let mut warnings = Vec::new();
     let mut unsupported_nodes = Vec::new();
+    let mut unsupported_diagnostics = Vec::new();
     let mut written_sources = Vec::new();
     let mut seen_files = HashSet::new();
     let mut migration_entries = Vec::new();
@@ -346,7 +425,12 @@ pub fn import_xml_to_project(
         }
     }
 
-    inspect_unsupported_structure(root, &mut unsupported_nodes, &mut warnings);
+    inspect_unsupported_structure(
+        root,
+        &mut unsupported_nodes,
+        &mut warnings,
+        &mut unsupported_diagnostics,
+    );
 
     let source_map = parse_embedded_source_map(root);
     let detected_ecosystem = detect_vendor_ecosystem(root, &xml_text);
@@ -370,6 +454,14 @@ pub fn import_xml_to_project(
 
         let Some(name) = pou_name else {
             warnings.push("skipping <pou> without name attribute".to_string());
+            unsupported_diagnostics.push(unsupported_diagnostic(
+                "PLCO201",
+                "warning",
+                "pou",
+                "POU skipped because required name attribute is missing",
+                None,
+                "Skipped from import and counted in semantic-loss scoring",
+            ));
             loss_warnings += 1;
             migration_entries.push(PlcopenMigrationEntry {
                 name: entry_name,
@@ -383,6 +475,14 @@ pub fn import_xml_to_project(
 
         let Some(pou_type_raw) = pou_type_raw else {
             warnings.push(format!("skipping pou '{}': missing pouType", name));
+            unsupported_diagnostics.push(unsupported_diagnostic(
+                "PLCO202",
+                "warning",
+                "pou",
+                "POU skipped because pouType/type attribute is missing",
+                Some(name.clone()),
+                "Skipped from import and counted in semantic-loss scoring",
+            ));
             loss_warnings += 1;
             migration_entries.push(PlcopenMigrationEntry {
                 name,
@@ -400,6 +500,14 @@ pub fn import_xml_to_project(
                 name, pou_type_raw
             ));
             unsupported_nodes.push(format!("pouType:{}", pou_type_raw));
+            unsupported_diagnostics.push(unsupported_diagnostic(
+                "PLCO203",
+                "warning",
+                format!("pouType:{pou_type_raw}"),
+                format!("POU type '{pou_type_raw}' is outside the strict subset"),
+                Some(name.clone()),
+                "POU skipped; convert to PROGRAM/FUNCTION/FUNCTION_BLOCK or supported aliases",
+            ));
             loss_warnings += 1;
             migration_entries.push(PlcopenMigrationEntry {
                 name,
@@ -413,6 +521,14 @@ pub fn import_xml_to_project(
 
         let Some(body) = st_body else {
             warnings.push(format!("skipping pou '{}': missing body/ST", name));
+            unsupported_diagnostics.push(unsupported_diagnostic(
+                "PLCO204",
+                "warning",
+                "pou/body",
+                "POU skipped because body/ST payload is missing",
+                Some(name.clone()),
+                "POU skipped; provide an ST body in PLCopen XML",
+            ));
             loss_warnings += 1;
             migration_entries.push(PlcopenMigrationEntry {
                 name,
@@ -427,6 +543,14 @@ pub fn import_xml_to_project(
         let body = body.trim();
         if body.is_empty() {
             warnings.push(format!("skipping pou '{}': empty ST body", name));
+            unsupported_diagnostics.push(unsupported_diagnostic(
+                "PLCO205",
+                "warning",
+                "pou/body/ST",
+                "POU skipped because ST body is empty",
+                Some(name.clone()),
+                "POU skipped; provide non-empty ST source text",
+            ));
             loss_warnings += 1;
             migration_entries.push(PlcopenMigrationEntry {
                 name,
@@ -476,6 +600,14 @@ pub fn import_xml_to_project(
 
     if discovered_pous == 0 {
         warnings.push("no <pou> nodes discovered in input XML".to_string());
+        unsupported_diagnostics.push(unsupported_diagnostic(
+            "PLCO206",
+            "warning",
+            "types/pous",
+            "Input XML does not contain importable <pou> elements",
+            None,
+            "Provide PLCopen ST POUs under project/types/pous",
+        ));
         loss_warnings += 1;
     }
 
@@ -492,6 +624,8 @@ pub fn import_xml_to_project(
         unsupported_nodes.len(),
         loss_warnings,
     );
+    let compatibility_coverage =
+        calculate_compatibility_coverage(imported_pous, skipped_pous, unsupported_nodes.len());
 
     let preserved_vendor_extensions =
         preserve_vendor_extensions(root, &xml_text, project_root, &mut warnings)?;
@@ -511,7 +645,9 @@ pub fn import_xml_to_project(
         skipped_pous,
         source_coverage_percent,
         semantic_loss_percent,
+        compatibility_coverage: compatibility_coverage.clone(),
         unsupported_nodes: unsupported_nodes.clone(),
+        unsupported_diagnostics: unsupported_diagnostics.clone(),
         warnings: warnings.clone(),
         entries: migration_entries,
     };
@@ -537,6 +673,8 @@ pub fn import_xml_to_project(
         source_coverage_percent,
         semantic_loss_percent,
         detected_ecosystem,
+        compatibility_coverage,
+        unsupported_diagnostics,
     })
 }
 
@@ -798,6 +936,56 @@ fn calculate_semantic_loss(
     round_percent((skipped_ratio * 70.0) + (unsupported_ratio * 20.0) + (warning_ratio * 10.0))
 }
 
+fn calculate_compatibility_coverage(
+    imported_pous: usize,
+    skipped_pous: usize,
+    unsupported_nodes: usize,
+) -> PlcopenCompatibilityCoverage {
+    let supported_items = imported_pous;
+    let partial_items = unsupported_nodes;
+    let unsupported_items = skipped_pous;
+    let total = supported_items + partial_items + unsupported_items;
+    let support_percent = if total == 0 {
+        0.0
+    } else {
+        round_percent((supported_items as f64 / total as f64) * 100.0)
+    };
+    let verdict = if total == 0 {
+        "none"
+    } else if unsupported_items == 0 && partial_items == 0 {
+        "full"
+    } else if supported_items > 0 {
+        "partial"
+    } else {
+        "low"
+    };
+    PlcopenCompatibilityCoverage {
+        supported_items,
+        partial_items,
+        unsupported_items,
+        support_percent,
+        verdict: verdict.to_string(),
+    }
+}
+
+fn unsupported_diagnostic(
+    code: &str,
+    severity: &str,
+    node: impl Into<String>,
+    message: impl Into<String>,
+    pou: Option<String>,
+    action: impl Into<String>,
+) -> PlcopenUnsupportedDiagnostic {
+    PlcopenUnsupportedDiagnostic {
+        code: code.to_string(),
+        severity: severity.to_string(),
+        node: node.into(),
+        message: message.into(),
+        pou,
+        action: action.into(),
+    }
+}
+
 fn round_percent(value: f64) -> f64 {
     (value * 100.0).round() / 100.0
 }
@@ -821,6 +1009,12 @@ fn detect_vendor_ecosystem(root: roxmltree::Node<'_, '_>, xml_text: &str) -> Str
 
     if normalized.contains("twincat") || normalized.contains("beckhoff") {
         "beckhoff-twincat".to_string()
+    } else if normalized.contains("schneider")
+        || normalized.contains("ecostruxure")
+        || normalized.contains("unity pro")
+        || normalized.contains("control expert")
+    {
+        "schneider-ecostruxure".to_string()
     } else if normalized.contains("codesys")
         || normalized.contains("3s-smart")
         || normalized.contains("machine expert")
@@ -868,6 +1062,7 @@ fn inspect_unsupported_structure(
     root: roxmltree::Node<'_, '_>,
     unsupported_nodes: &mut Vec<String>,
     warnings: &mut Vec<String>,
+    unsupported_diagnostics: &mut Vec<PlcopenUnsupportedDiagnostic>,
 ) {
     for child in root.children().filter(|child| child.is_element()) {
         let name = child.tag_name().name();
@@ -880,6 +1075,14 @@ fn inspect_unsupported_structure(
                 "unsupported PLCopen node '<{}>' preserved as metadata only",
                 name
             ));
+            unsupported_diagnostics.push(unsupported_diagnostic(
+                "PLCO101",
+                "warning",
+                name,
+                format!("Unsupported top-level PLCopen node '<{}>'", name),
+                None,
+                "Preserved as metadata only; not imported into runtime semantics",
+            ));
         }
         if name.eq_ignore_ascii_case("types") {
             for type_child in child.children().filter(|entry| entry.is_element()) {
@@ -889,6 +1092,14 @@ fn inspect_unsupported_structure(
                     warnings.push(format!(
                         "unsupported PLCopen node '<types>/<{}>' skipped (strict subset)",
                         type_name
+                    ));
+                    unsupported_diagnostics.push(unsupported_diagnostic(
+                        "PLCO102",
+                        "warning",
+                        format!("types/{type_name}"),
+                        format!("Unsupported PLCopen <types>/<{}> section", type_name),
+                        None,
+                        "Skipped in strict subset; migrate supported POUs manually",
                     ));
                 }
             }
@@ -1092,6 +1303,11 @@ END_PROGRAM
         assert!(report.migration_report_path.is_file());
         assert!(report.source_coverage_percent > 0.0);
         assert!(report.semantic_loss_percent > 0.0);
+        assert_eq!(report.compatibility_coverage.verdict, "partial");
+        assert!(report
+            .unsupported_diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "PLCO102"));
         let source = std::fs::read_to_string(&report.written_sources[0]).expect("read source");
         assert!(source.contains("PROGRAM Main"));
         let vendor = report
@@ -1148,5 +1364,11 @@ END_PROGRAM
             .strict_subset
             .iter()
             .any(|item| item.contains("types/pous/pou")));
+        assert!(profile
+            .compatibility_matrix
+            .iter()
+            .any(|entry| entry.status == "supported"));
+        assert!(!profile.round_trip_limits.is_empty());
+        assert!(!profile.known_gaps.is_empty());
     }
 }

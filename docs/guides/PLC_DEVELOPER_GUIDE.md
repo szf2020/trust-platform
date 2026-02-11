@@ -57,7 +57,9 @@ PLCopen XML interchange (strict ST subset profile):
 ```
 trust-runtime plcopen profile
 trust-runtime plcopen export --project <project-folder> --output <project-folder>/interop/plcopen.xml
+trust-runtime plcopen export --project <project-folder> --output <project-folder>/interop/plcopen.xml --json
 trust-runtime plcopen import --input <plcopen.xml> --project <target-project-folder>
+trust-runtime plcopen import --input <plcopen.xml> --project <target-project-folder> --json
 ```
 
 Import writes migrated sources to `sources/` and a migration report to:
@@ -65,7 +67,12 @@ Import writes migrated sources to `sources/` and a migration report to:
 `<project-folder>/interop/plcopen-migration-report.json`
 
 The report includes detected vendor ecosystem, discovered/imported/skipped POU
-counts, source coverage, semantic-loss score, and per-POU skip reasons.
+counts, source coverage, semantic-loss score, compatibility coverage summary,
+structured unsupported-node diagnostics, and per-POU skip reasons.
+
+For compatibility matrix, round-trip limits, and known gaps, see:
+
+`docs/guides/PLCOPEN_INTEROP_COMPATIBILITY.md`
 
 Start runtime:
 ```
