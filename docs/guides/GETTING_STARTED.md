@@ -106,6 +106,13 @@ For GPIO:
 - Configure safe‑state outputs
 - Save I/O config, then restart the runtime
 
+For EtherCAT profile:
+- Select `ethercat`
+- Use `adapter = "mock"` for deterministic local/CI runs
+- Use a NIC name (for example `eth0`) for hardware transport
+- Save I/O config, then restart the runtime
+- See `docs/guides/ETHERCAT_BACKEND_V1.md` for module-chain contract details
+
 ## 7) Watch variables + trends
 
 - **Program → Variable watch**: add a variable name, see its live value, and (in debug mode) force values.

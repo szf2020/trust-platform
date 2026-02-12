@@ -164,6 +164,7 @@
                 <div class="field" style="margin-top:12px;">
                   <label class="muted">Driver <span class="help" title="Select the hardware driver used for I/O." aria-label="Driver selection help">?</span></label>
                   <select id="ioDriverSelect">
+                    <option value="ethercat">ethercat</option>
                     <option value="gpio">gpio</option>
                     <option value="modbus-tcp">modbus-tcp</option>
                     <option value="loopback">loopback</option>
@@ -598,6 +599,7 @@
                   <label class="muted">I/O driver <span class="help" title="Auto selects gpio on Raspberry Pi or loopback for simulation." aria-label="Driver help">?</span></label>
                   <select id="setupDriver">
                     <option value="auto">auto</option>
+                    <option value="ethercat">ethercat</option>
                     <option value="loopback">loopback</option>
                     <option value="gpio">gpio</option>
                     <option value="modbus-tcp">modbus-tcp</option>

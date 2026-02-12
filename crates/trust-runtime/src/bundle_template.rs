@@ -24,7 +24,7 @@ pub struct IoDriverTemplate {
 pub fn build_io_config_auto(driver: &str) -> anyhow::Result<IoConfigTemplate> {
     if !matches!(
         driver,
-        "loopback" | "gpio" | "modbus-tcp" | "simulated" | "mqtt"
+        "loopback" | "gpio" | "modbus-tcp" | "simulated" | "mqtt" | "ethercat"
     ) {
         anyhow::bail!("unknown driver '{driver}'");
     }
@@ -98,6 +98,39 @@ pub fn build_io_config_auto(driver: &str) -> anyhow::Result<IoConfigTemplate> {
         return Ok(IoConfigTemplate {
             drivers: vec![IoDriverTemplate {
                 name: "mqtt".to_string(),
+                params: toml::Value::Table(params),
+            }],
+            safe_state,
+        });
+    }
+    if driver.eq_ignore_ascii_case("ethercat") {
+        let mut params = toml::map::Map::new();
+        params.insert("adapter".into(), toml::Value::String("mock".to_string()));
+        params.insert("timeout_ms".into(), toml::Value::Integer(250));
+        params.insert("cycle_warn_ms".into(), toml::Value::Integer(5));
+        params.insert("on_error".into(), toml::Value::String("fault".to_string()));
+        params.insert(
+            "modules".into(),
+            toml::Value::Array(vec![
+                toml::Value::Table(toml::map::Map::from_iter([
+                    ("model".into(), toml::Value::String("EK1100".to_string())),
+                    ("slot".into(), toml::Value::Integer(0)),
+                ])),
+                toml::Value::Table(toml::map::Map::from_iter([
+                    ("model".into(), toml::Value::String("EL1008".to_string())),
+                    ("slot".into(), toml::Value::Integer(1)),
+                    ("channels".into(), toml::Value::Integer(8)),
+                ])),
+                toml::Value::Table(toml::map::Map::from_iter([
+                    ("model".into(), toml::Value::String("EL2008".to_string())),
+                    ("slot".into(), toml::Value::Integer(2)),
+                    ("channels".into(), toml::Value::Integer(8)),
+                ])),
+            ]),
+        );
+        return Ok(IoConfigTemplate {
+            drivers: vec![IoDriverTemplate {
+                name: "ethercat".to_string(),
                 params: toml::Value::Table(params),
             }],
             safe_state,

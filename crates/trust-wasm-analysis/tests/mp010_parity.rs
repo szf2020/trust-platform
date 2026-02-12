@@ -1,0 +1,514 @@
+use std::fs;
+use std::hint::black_box;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+use text_size::{TextRange, TextSize};
+use trust_hir::project::{Project, SourceKey};
+use trust_hir::DiagnosticSeverity;
+use trust_ide::StdlibFilter;
+use trust_wasm_analysis::{
+    ApplyDocumentsResult, BrowserAnalysisEngine, CompletionItem, CompletionRequest, DocumentInput,
+    EngineStatus, HoverItem, HoverRequest, Position, Range, RelatedInfoItem, WasmAnalysisEngine,
+};
+
+#[test]
+fn diagnostics_parity_matches_native_analysis() {
+    let document = DocumentInput {
+        uri: "memory:///diagnostics.st".to_string(),
+        text: r#"PROGRAM Main
+VAR
+    value : INT;
+END_VAR
+
+value := UnknownSymbol + 1;
+END_PROGRAM
+"#
+        .to_string(),
+    };
+
+    let mut engine = BrowserAnalysisEngine::new();
+    let apply = engine
+        .replace_documents(vec![document.clone()])
+        .expect("load documents");
+    assert_eq!(apply.documents.len(), 1);
+
+    let adapter = engine
+        .diagnostics(&document.uri)
+        .expect("adapter diagnostics");
+    let native = native_diagnostics(&[document], "memory:///diagnostics.st");
+    assert_eq!(adapter, native);
+}
+
+#[test]
+fn hover_and_completion_parity_matches_native_analysis() {
+    let hover_doc = DocumentInput {
+        uri: "memory:///hover.st".to_string(),
+        text: r#"PROGRAM Main
+VAR
+    value : INT;
+END_VAR
+
+value := value + 1;
+END_PROGRAM
+"#
+        .to_string(),
+    };
+    let completion_doc = DocumentInput {
+        uri: "memory:///completion.st".to_string(),
+        text: r#"PROGRAM Main
+VAR
+    value : INT;
+END_VAR
+
+val
+END_PROGRAM
+"#
+        .to_string(),
+    };
+    let documents = vec![hover_doc.clone(), completion_doc.clone()];
+
+    let mut engine = BrowserAnalysisEngine::new();
+    engine
+        .replace_documents(documents.clone())
+        .expect("load documents");
+
+    let hover_offset = hover_doc
+        .text
+        .find("value + 1;")
+        .expect("hover anchor exists") as u32;
+    let hover_request = HoverRequest {
+        uri: hover_doc.uri.clone(),
+        position: offset_to_position_utf16(&hover_doc.text, hover_offset),
+    };
+    let adapter_hover = engine.hover(hover_request.clone()).expect("adapter hover");
+    let native_hover = native_hover(&documents, &hover_request);
+    assert_eq!(adapter_hover, native_hover);
+
+    let completion_offset = completion_doc
+        .text
+        .find("val")
+        .expect("completion anchor exists") as u32
+        + 3;
+    let completion_request = CompletionRequest {
+        uri: completion_doc.uri.clone(),
+        position: offset_to_position_utf16(&completion_doc.text, completion_offset),
+        limit: Some(30),
+    };
+    let adapter_completion = engine
+        .completion(completion_request.clone())
+        .expect("adapter completion");
+    let native_completion = native_completion(&documents, &completion_request);
+    assert_eq!(adapter_completion, native_completion);
+}
+
+#[test]
+fn wasm_json_adapter_contract_is_stable() {
+    let mut engine = WasmAnalysisEngine::new();
+    let bad_json = engine
+        .apply_documents_json("{\"broken\"")
+        .expect_err("bad json should fail");
+    assert!(bad_json.contains("invalid documents json"));
+
+    let payload = serde_json::to_string(&vec![DocumentInput {
+        uri: "memory:///json.st".to_string(),
+        text: "PROGRAM Main\nEND_PROGRAM\n".to_string(),
+    }])
+    .expect("serialize docs");
+    let apply_json = engine
+        .apply_documents_json(&payload)
+        .expect("apply docs json");
+    let apply: ApplyDocumentsResult = serde_json::from_str(&apply_json).expect("parse apply json");
+    assert_eq!(apply.documents.len(), 1);
+
+    let status_json = engine.status_json().expect("status json");
+    let status: EngineStatus = serde_json::from_str(&status_json).expect("parse status json");
+    assert_eq!(status.document_count, 1);
+    assert_eq!(status.uris, vec!["memory:///json.st".to_string()]);
+}
+
+#[test]
+fn browser_analysis_latency_budget_against_native_is_within_spike_limits() {
+    let documents = load_plant_demo_documents();
+    let main_uri = "memory:///plant_demo/program.st";
+    let main_text = documents
+        .iter()
+        .find(|doc| doc.uri == main_uri)
+        .map(|doc| doc.text.clone())
+        .expect("program document present");
+
+    let mut adapter = BrowserAnalysisEngine::new();
+    adapter
+        .replace_documents(documents.clone())
+        .expect("load adapter docs");
+
+    let native_project = native_project(&documents);
+    let native_file = native_project
+        .file_id_for_key(&SourceKey::from_virtual(main_uri.to_string()))
+        .expect("native file id");
+
+    let hover_offset = main_text.find("Pump.Status").expect("hover anchor exists") as u32;
+    let hover_position = offset_to_position_utf16(&main_text, hover_offset);
+    let completion_offset = main_text
+        .find("Status := ")
+        .expect("completion anchor exists") as u32
+        + 10;
+    let completion_position = offset_to_position_utf16(&main_text, completion_offset);
+
+    let hover_request = HoverRequest {
+        uri: main_uri.to_string(),
+        position: hover_position,
+    };
+    let completion_request = CompletionRequest {
+        uri: main_uri.to_string(),
+        position: completion_position,
+        limit: Some(50),
+    };
+
+    // Warm both paths before timing to reduce first-query cache noise.
+    black_box(
+        adapter
+            .diagnostics(main_uri)
+            .expect("adapter diagnostics warmup"),
+    );
+    black_box(
+        adapter
+            .hover(hover_request.clone())
+            .expect("adapter hover warmup"),
+    );
+    black_box(
+        adapter
+            .completion(completion_request.clone())
+            .expect("adapter completion warmup"),
+    );
+    native_project.with_database(|db| {
+        black_box(trust_ide::diagnostics::collect_diagnostics(db, native_file));
+        black_box(trust_ide::hover_with_filter(
+            db,
+            native_file,
+            TextSize::from(hover_offset),
+            &StdlibFilter::allow_all(),
+        ));
+        black_box(trust_ide::complete_with_filter(
+            db,
+            native_file,
+            TextSize::from(completion_offset),
+            &StdlibFilter::allow_all(),
+        ));
+    });
+
+    let iterations = 24;
+    let adapter_diagnostics = measure_iterations(iterations, || {
+        black_box(adapter.diagnostics(main_uri).expect("adapter diagnostics"))
+    });
+    let adapter_hover = measure_iterations(iterations, || {
+        black_box(adapter.hover(hover_request.clone()).expect("adapter hover"))
+    });
+    let adapter_completion = measure_iterations(iterations, || {
+        black_box(
+            adapter
+                .completion(completion_request.clone())
+                .expect("adapter completion"),
+        )
+    });
+
+    let native_diagnostics = measure_iterations(iterations, || {
+        native_project.with_database(|db| {
+            black_box(trust_ide::diagnostics::collect_diagnostics(db, native_file))
+        })
+    });
+    let native_hover = measure_iterations(iterations, || {
+        native_project.with_database(|db| {
+            black_box(trust_ide::hover_with_filter(
+                db,
+                native_file,
+                TextSize::from(hover_offset),
+                &StdlibFilter::allow_all(),
+            ))
+        })
+    });
+    let native_completion = measure_iterations(iterations, || {
+        native_project.with_database(|db| {
+            black_box(trust_ide::complete_with_filter(
+                db,
+                native_file,
+                TextSize::from(completion_offset),
+                &StdlibFilter::allow_all(),
+            ))
+        })
+    });
+
+    assert_budget("diagnostics", adapter_diagnostics, native_diagnostics);
+    assert_budget("hover", adapter_hover, native_hover);
+    assert_budget("completion", adapter_completion, native_completion);
+}
+
+fn assert_budget(name: &str, adapter: Duration, native: Duration) {
+    let adapter_us = adapter.as_micros();
+    let native_us = native.as_micros();
+    let ratio_limit = native_us.saturating_mul(4);
+    let headroom = 120_000_u128;
+    let allowed = ratio_limit.saturating_add(headroom);
+
+    eprintln!(
+        "{name}: adapter={}us native={}us allowed={}us",
+        adapter_us, native_us, allowed
+    );
+
+    assert!(
+        adapter_us <= allowed,
+        "{name} exceeded spike budget (adapter={}us native={}us allowed={}us)",
+        adapter_us,
+        native_us,
+        allowed
+    );
+    assert!(
+        adapter <= Duration::from_secs(2),
+        "{name} exceeded absolute 2s spike limit: {adapter:?}"
+    );
+}
+
+fn measure_iterations<T>(iterations: usize, mut op: impl FnMut() -> T) -> Duration {
+    let start = Instant::now();
+    for _ in 0..iterations {
+        black_box(op());
+    }
+    start.elapsed()
+}
+
+fn native_diagnostics(
+    documents: &[DocumentInput],
+    uri: &str,
+) -> Vec<trust_wasm_analysis::DiagnosticItem> {
+    let project = native_project(documents);
+    let source = documents
+        .iter()
+        .find(|doc| doc.uri == uri)
+        .map(|doc| doc.text.as_str())
+        .expect("source exists");
+    let file_id = project
+        .file_id_for_key(&SourceKey::from_virtual(uri.to_string()))
+        .expect("file id exists");
+
+    let mut items = project.with_database(|db| {
+        trust_ide::diagnostics::collect_diagnostics(db, file_id)
+            .into_iter()
+            .map(|diagnostic| {
+                let mut related = diagnostic
+                    .related
+                    .into_iter()
+                    .map(|item| RelatedInfoItem {
+                        range: text_range_to_lsp(source, item.range),
+                        message: item.message,
+                    })
+                    .collect::<Vec<_>>();
+                related.sort_by(|left, right| {
+                    left.range
+                        .cmp(&right.range)
+                        .then_with(|| left.message.cmp(&right.message))
+                });
+                trust_wasm_analysis::DiagnosticItem {
+                    code: diagnostic.code.code().to_string(),
+                    severity: severity_label(diagnostic.severity).to_string(),
+                    message: diagnostic.message,
+                    range: text_range_to_lsp(source, diagnostic.range),
+                    related,
+                }
+            })
+            .collect::<Vec<_>>()
+    });
+    items.sort_by(|left, right| {
+        left.range
+            .cmp(&right.range)
+            .then_with(|| left.code.cmp(&right.code))
+            .then_with(|| left.message.cmp(&right.message))
+            .then_with(|| left.severity.cmp(&right.severity))
+    });
+    items
+}
+
+fn native_hover(documents: &[DocumentInput], request: &HoverRequest) -> Option<HoverItem> {
+    let project = native_project(documents);
+    let source = documents
+        .iter()
+        .find(|doc| doc.uri == request.uri)
+        .map(|doc| doc.text.as_str())
+        .expect("source exists");
+    let file_id = project
+        .file_id_for_key(&SourceKey::from_virtual(request.uri.clone()))
+        .expect("file id exists");
+    let offset = position_to_offset_utf16(source, request.position.clone()).expect("offset");
+
+    project.with_database(|db| {
+        trust_ide::hover_with_filter(
+            db,
+            file_id,
+            TextSize::from(offset),
+            &StdlibFilter::allow_all(),
+        )
+        .map(|hover| HoverItem {
+            contents: hover.contents,
+            range: hover.range.map(|range| text_range_to_lsp(source, range)),
+        })
+    })
+}
+
+fn native_completion(
+    documents: &[DocumentInput],
+    request: &CompletionRequest,
+) -> Vec<CompletionItem> {
+    let project = native_project(documents);
+    let source = documents
+        .iter()
+        .find(|doc| doc.uri == request.uri)
+        .map(|doc| doc.text.as_str())
+        .expect("source exists");
+    let file_id = project
+        .file_id_for_key(&SourceKey::from_virtual(request.uri.clone()))
+        .expect("file id exists");
+    let offset = position_to_offset_utf16(source, request.position.clone()).expect("offset");
+
+    let mut items = project.with_database(|db| {
+        trust_ide::complete_with_filter(
+            db,
+            file_id,
+            TextSize::from(offset),
+            &StdlibFilter::allow_all(),
+        )
+    });
+    items.sort_by(|left, right| {
+        left.sort_priority
+            .cmp(&right.sort_priority)
+            .then_with(|| left.label.cmp(&right.label))
+    });
+    let limit = request.limit.unwrap_or(50).clamp(1, 500) as usize;
+    items
+        .into_iter()
+        .take(limit)
+        .map(|item| CompletionItem {
+            label: item.label.to_string(),
+            kind: completion_kind_label(item.kind).to_string(),
+            detail: item.detail.map(|value| value.to_string()),
+            documentation: item.documentation.map(|value| value.to_string()),
+            insert_text: item.insert_text.map(|value| value.to_string()),
+            text_edit: item
+                .text_edit
+                .map(|edit| trust_wasm_analysis::CompletionTextEditItem {
+                    range: text_range_to_lsp(source, edit.range),
+                    new_text: edit.new_text.to_string(),
+                }),
+            sort_priority: item.sort_priority,
+        })
+        .collect()
+}
+
+fn completion_kind_label(kind: trust_ide::CompletionKind) -> &'static str {
+    match kind {
+        trust_ide::CompletionKind::Keyword => "keyword",
+        trust_ide::CompletionKind::Function => "function",
+        trust_ide::CompletionKind::FunctionBlock => "function_block",
+        trust_ide::CompletionKind::Method => "method",
+        trust_ide::CompletionKind::Property => "property",
+        trust_ide::CompletionKind::Variable => "variable",
+        trust_ide::CompletionKind::Constant => "constant",
+        trust_ide::CompletionKind::Type => "type",
+        trust_ide::CompletionKind::EnumValue => "enum_value",
+        trust_ide::CompletionKind::Snippet => "snippet",
+    }
+}
+
+fn severity_label(severity: DiagnosticSeverity) -> &'static str {
+    match severity {
+        DiagnosticSeverity::Error => "error",
+        DiagnosticSeverity::Warning => "warning",
+        DiagnosticSeverity::Info => "info",
+        DiagnosticSeverity::Hint => "hint",
+    }
+}
+
+fn native_project(documents: &[DocumentInput]) -> Project {
+    let mut project = Project::default();
+    for document in documents {
+        project.set_source_text(
+            SourceKey::from_virtual(document.uri.clone()),
+            document.text.clone(),
+        );
+    }
+    project
+}
+
+fn text_range_to_lsp(content: &str, range: TextRange) -> Range {
+    Range {
+        start: offset_to_position_utf16(content, u32::from(range.start())),
+        end: offset_to_position_utf16(content, u32::from(range.end())),
+    }
+}
+
+fn offset_to_position_utf16(content: &str, offset: u32) -> Position {
+    let clamped_offset = (offset as usize).min(content.len());
+    let mut line = 0u32;
+    let mut character = 0u32;
+    for (index, ch) in content.char_indices() {
+        if index >= clamped_offset {
+            break;
+        }
+        if ch == '\n' {
+            line = line.saturating_add(1);
+            character = 0;
+        } else {
+            character = character.saturating_add(ch.len_utf16() as u32);
+        }
+    }
+    Position { line, character }
+}
+
+fn position_to_offset_utf16(content: &str, position: Position) -> Option<u32> {
+    let mut line = 0u32;
+    let mut character = 0u32;
+    for (index, ch) in content.char_indices() {
+        if line == position.line {
+            if character == position.character {
+                return Some(index as u32);
+            }
+            if ch == '\n' {
+                return Some(index as u32);
+            }
+            let width = ch.len_utf16() as u32;
+            if character.saturating_add(width) > position.character {
+                return Some(index as u32);
+            }
+            character = character.saturating_add(width);
+            continue;
+        }
+        if ch == '\n' {
+            line = line.saturating_add(1);
+            character = 0;
+        }
+    }
+
+    if line == position.line {
+        Some(content.len() as u32)
+    } else {
+        None
+    }
+}
+
+fn load_plant_demo_documents() -> Vec<DocumentInput> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/plant_demo/src")
+        .canonicalize()
+        .expect("canonicalize plant_demo path");
+    let files = ["types.st", "fb_pump.st", "program.st", "config.st"];
+    files
+        .iter()
+        .map(|name| {
+            let path = root.join(name);
+            let text = fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("read {} failed: {err}", path.display()));
+            DocumentInput {
+                uri: format!("memory:///plant_demo/{name}"),
+                text,
+            }
+        })
+        .collect()
+}

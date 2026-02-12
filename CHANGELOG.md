@@ -6,10 +6,30 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 
 ## [Unreleased]
 
-Target release: `v0.7.7`
+Target release: `v0.7.8`
 
 ### Added
 
+- truST Browser Analysis Spike (Deliverable 10):
+  - Added new browser/WASM analysis adapter crate `crates/trust-wasm-analysis/` exposing deterministic diagnostics, hover, and completion APIs for virtual-document analysis.
+  - Added JSON boundary wrapper `WasmAnalysisEngine` for worker/browser transport integration (`applyDocumentsJson`, `diagnosticsJson`, `hoverJson`, `completionJson`, `statusJson`).
+  - Added parity + performance regression suite against native analysis in `crates/trust-wasm-analysis/tests/mp010_parity.rs`.
+  - Added browser worker host example and build pipeline:
+    - `examples/browser_analysis_wasm_spike/`
+    - `scripts/build_browser_analysis_wasm_spike.sh`
+    - `scripts/check_mp010_browser_analysis.sh`
+  - Published scope contract and evidence report:
+    - `docs/guides/BROWSER_ANALYSIS_WASM_SPIKE.md`
+    - `docs/reports/browser-analysis-wasm-spike-20260212.md`
+- EtherCAT Backend v1 (Deliverable 9):
+  - Added new runtime I/O driver profile: `io.driver = "ethercat"` with EtherCrab-backed hardware transport (`adapter = "<nic>"`) and deterministic mock transport mode (`adapter = "mock"`).
+  - Added module-chain process-image mapping contract for Beckhoff-style digital I/O profiles (`EK1100`, `EL1008`, `EL2008`) with size-check diagnostics.
+  - Added startup/discovery diagnostics and cycle-time health telemetry (`ok`/`degraded`/`faulted`) with driver error policy handling.
+  - Added EtherCAT deterministic integration coverage and runtime example project:
+    - `crates/trust-runtime/tests/ethercat_driver.rs`
+    - `examples/ethercat_ek1100_elx008_v1/`
+  - Published EtherCAT backend guide with scope boundaries and compliance checkpoint:
+    - `docs/guides/ETHERCAT_BACKEND_V1.md`
 - Mitsubishi GX Works3 Compatibility v1 (Deliverable 8):
   - Added Mitsubishi vendor profile support in LSP tooling (`vendor_profile = "mitsubishi"` and alias `gxworks3`) for formatting, stdlib selection defaults, and diagnostics rule-pack aliases.
   - Added native `DIFU`/`DIFD` edge-alias support in semantic/runtime builtins (mapped to IEC `R_TRIG`/`F_TRIG` behavior) for normal ST authoring and execution.
@@ -71,6 +91,7 @@ Target release: `v0.7.7`
 
 ### Changed
 
+- Browser/WASM position mapping now uses UTF-16 column semantics for protocol compatibility in `trust-wasm-analysis` range/position conversions.
 - CI release-gate aggregation now includes a dedicated `Editor Expansion Smoke` gate for Neovim/Zed integration coverage.
 - PLCopen XML Full ST Project Coverage (Deliverable 5):
   - Profile advanced to `trust-st-complete-v1`.

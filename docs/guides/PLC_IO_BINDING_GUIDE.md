@@ -110,6 +110,9 @@ on_error = "fault"
 
 ## 6) Validate + Inspect
 
+EtherCAT backend details (module chain profile, diagnostics, and hardware setup):
+`docs/guides/ETHERCAT_BACKEND_V1.md`.
+
 Validate a project folder:
 ```
 trust-runtime validate --project <project-folder>

@@ -44,7 +44,7 @@ let refreshTimer = null;
 let discoveryTimer = null;
 let initialLoad = true;
 
-const fallbackSupportedIoDrivers = ['gpio', 'loopback', 'modbus-tcp', 'simulated', 'mqtt'];
+const fallbackSupportedIoDrivers = ['ethercat', 'gpio', 'loopback', 'modbus-tcp', 'simulated', 'mqtt'];
 
 const pageTitles = {
   overview: 'PLC Overview',
@@ -115,7 +115,7 @@ function driverParamsText(params) {
 }
 
 function isKnownIoDriver(name) {
-  return ['gpio', 'loopback', 'modbus-tcp', 'simulated', 'mqtt'].includes(String(name || '').trim());
+  return ['ethercat', 'gpio', 'loopback', 'modbus-tcp', 'simulated', 'mqtt'].includes(String(name || '').trim());
 }
 
 function defaultIoDriverParams(name) {
@@ -147,6 +147,19 @@ function defaultIoDriverParams(name) {
       outputs: [],
     };
   }
+  if (driver === 'ethercat') {
+    return {
+      adapter: 'mock',
+      timeout_ms: 250,
+      cycle_warn_ms: 5,
+      on_error: 'fault',
+      modules: [
+        { model: 'EK1100', slot: 0 },
+        { model: 'EL1008', slot: 1, channels: 8 },
+        { model: 'EL2008', slot: 2, channels: 8 },
+      ],
+    };
+  }
   return {};
 }
 
@@ -168,6 +181,13 @@ function normalizeIoDriverParams(name, params) {
     const merged = Object.assign({}, defaultIoDriverParams(driver), raw);
     merged.inputs = Array.isArray(raw.inputs) ? raw.inputs : [];
     merged.outputs = Array.isArray(raw.outputs) ? raw.outputs : [];
+    return merged;
+  }
+  if (driver === 'ethercat') {
+    const merged = Object.assign({}, defaultIoDriverParams(driver), raw);
+    merged.modules = Array.isArray(raw.modules) ? raw.modules : defaultIoDriverParams(driver).modules;
+    const onError = String(merged.on_error || 'fault').toLowerCase();
+    merged.on_error = ['fault', 'warn', 'ignore'].includes(onError) ? onError : 'fault';
     return merged;
   }
   return raw;
@@ -303,6 +323,9 @@ function renderAdditionalDriverEditor(entry, idx) {
   }
   if (name === 'loopback' || name === 'simulated') {
     return '<div class="note" style="margin-top:8px;">No extra parameters required for this driver.</div>';
+  }
+  if (name === 'ethercat') {
+    return '<div class="note" style="margin-top:8px;">Uses adapter + module profile from io.toml params (use mock for deterministic runs, NIC adapter for hardware).</div>';
   }
   const rawText = entry.custom_json || driverParamsText(params);
   return `
@@ -1629,6 +1652,18 @@ function buildDriverParamsForSave(name, rawParams, label) {
   if (driver === 'loopback' || driver === 'simulated') {
     return {};
   }
+  if (driver === 'ethercat') {
+    const normalized = normalizeIoDriverParams(driver, params);
+    return {
+      adapter: String(normalized.adapter || 'mock').trim() || 'mock',
+      timeout_ms: normalizeNumber(normalized.timeout_ms, 250),
+      cycle_warn_ms: normalizeNumber(normalized.cycle_warn_ms, 5),
+      on_error: ['fault', 'warn', 'ignore'].includes(String(normalized.on_error || 'fault').toLowerCase())
+        ? String(normalized.on_error || 'fault').toLowerCase()
+        : 'fault',
+      modules: Array.isArray(normalized.modules) ? normalized.modules : defaultIoDriverParams(driver).modules,
+    };
+  }
   if (!params || typeof params !== 'object' || Array.isArray(params)) {
     throw new Error(`${label}: params must be a JSON object.`);
   }
@@ -1729,6 +1764,8 @@ async function saveIoConfig() {
     }, 'Primary driver');
     const clientId = document.getElementById('mqttClientId')?.value.trim() || '';
     if (clientId) params.client_id = clientId;
+  } else if (driver === 'ethercat') {
+    params = buildDriverParamsForSave(driver, ioConfigState.params || {}, 'Primary driver');
   } else {
     params = buildDriverParamsForSave(driver, {}, 'Primary driver');
   }

@@ -8,7 +8,8 @@ use smol_str::SmolStr;
 use crate::error::RuntimeError;
 
 use super::{
-    GpioDriver, IoDriver, LoopbackIoDriver, ModbusTcpDriver, MqttIoDriver, SimulatedIoDriver,
+    EthercatIoDriver, GpioDriver, IoDriver, LoopbackIoDriver, ModbusTcpDriver, MqttIoDriver,
+    SimulatedIoDriver,
 };
 
 pub struct IoDriverRegistry {
@@ -57,6 +58,10 @@ impl IoDriverRegistry {
 
         registry.register("mqtt", create_mqtt, validate_mqtt);
         registry.register_alias("mqtt-tcp", "mqtt");
+
+        registry.register("ethercat", create_ethercat, validate_ethercat);
+        registry.register_alias("ether-cat", "ethercat");
+        registry.register_alias("ecat", "ethercat");
         registry
     }
 
@@ -179,6 +184,16 @@ fn create_mqtt(params: &toml::Value) -> Result<Box<dyn IoDriver>, RuntimeError> 
     Ok(Box::new(driver))
 }
 
+fn validate_ethercat(params: &toml::Value) -> Result<(), RuntimeError> {
+    EthercatIoDriver::validate_params(params)?;
+    Ok(())
+}
+
+fn create_ethercat(params: &toml::Value) -> Result<Box<dyn IoDriver>, RuntimeError> {
+    let driver = EthercatIoDriver::from_params(params)?;
+    Ok(Box::new(driver))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,6 +205,7 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "ethercat".to_string(),
                 "gpio".to_string(),
                 "loopback".to_string(),
                 "modbus-tcp".to_string(),

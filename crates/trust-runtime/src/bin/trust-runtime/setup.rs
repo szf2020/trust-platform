@@ -393,10 +393,10 @@ fn run_cli_guided_interactive() -> anyhow::Result<()> {
         wizard::remove_io_toml(&io_path)?;
     } else {
         println!(
-            "Choose gpio for Raspberry Pi, loopback/simulated for local runs, modbus-tcp for devices, or mqtt for brokered exchange."
+            "Choose gpio for Raspberry Pi, loopback/simulated for local runs, modbus-tcp for devices, mqtt for brokered exchange, or ethercat (mock for deterministic runs, NIC adapter for hardware) for EtherCAT module-chain validation."
         );
         let driver = prompt::prompt_string(
-            "I/O driver (gpio, loopback, simulated, modbus-tcp, mqtt)",
+            "I/O driver (gpio, loopback, simulated, modbus-tcp, mqtt, ethercat)",
             &defaults.driver,
         )?;
         wizard::write_io_toml_with_driver(&io_path, driver.trim())?;

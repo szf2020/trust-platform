@@ -142,12 +142,12 @@ Fix:
 
 You see in the CLI:
 ```
-invalid I/O driver 'spi'. Expected: loopback, gpio, simulated, modbus-tcp, or mqtt.
+invalid I/O driver 'spi'. Expected: loopback, gpio, simulated, modbus-tcp, mqtt, or ethercat.
 ```
 
 Fix:
 1. Re-run the wizard: `trust-runtime wizard`.
-2. Choose one supported driver: `loopback`, `simulated`, `gpio`, `modbus-tcp`, or `mqtt`.
+2. Choose one supported driver: `loopback`, `simulated`, `gpio`, `modbus-tcp`, `mqtt`, or `ethercat`.
 
 ### “Permission denied” writing system I/O
 

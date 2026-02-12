@@ -27,3 +27,4 @@ For current Salsa status, read `salsa-upgrade-report.md` and the latest overnigh
 - `salsa-integration-audit.md`
 - `salsa-upgrade-report.md`
 - `salsa-overnight-hardening-20260209.md`
+- `browser-analysis-wasm-spike-20260212.md`

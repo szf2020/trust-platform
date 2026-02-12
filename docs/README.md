@@ -45,6 +45,23 @@ Mitsubishi GX Works3 v1 supported subset, known incompatibilities, and
 regression coverage are documented in:
 `docs/guides/MITSUBISHI_GXWORKS3_COMPATIBILITY.md`.
 
+## EtherCAT Backend v1
+
+EtherCAT backend v1 driver scope, module-chain mapping profile, startup/health
+diagnostics, and hardware setup guidance are documented in:
+`docs/guides/ETHERCAT_BACKEND_V1.md`.
+
+## Browser Analysis WASM Spike
+
+Worker-based browser static-analysis spike scope, protocol contract, unsupported
+features, and go/no-go decision are documented in:
+`docs/guides/BROWSER_ANALYSIS_WASM_SPIKE.md`.
+
+Browser host example and build harness:
+- `examples/browser_analysis_wasm_spike/`
+- `scripts/build_browser_analysis_wasm_spike.sh`
+- `scripts/check_mp010_browser_analysis.sh`
+
 ## Editor Expansion (Neovim + Zed)
 
 Official non-VS-Code LSP setup guides and reference configurations are

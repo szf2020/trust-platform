@@ -84,7 +84,14 @@ pub fn create_bundle(path: Option<PathBuf>) -> anyhow::Result<PathBuf> {
     let driver_default = default_driver();
     let driver = prompt_choice(
         "I/O driver",
-        &["loopback", "gpio", "simulated", "modbus-tcp", "mqtt"],
+        &[
+            "loopback",
+            "gpio",
+            "simulated",
+            "modbus-tcp",
+            "mqtt",
+            "ethercat",
+        ],
         driver_default.as_str(),
     )?;
     let io_config = build_io_config(&driver)?;

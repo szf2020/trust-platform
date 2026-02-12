@@ -1494,6 +1494,19 @@ Driver health is exposed via `ctl status` and the TUI.
 - Reconnection is non-blocking; runtime cycle remains deterministic.
 - Security baseline rejects insecure remote brokers unless explicitly overridden.
 
+3. **EtherCAT (backend v1)**
+- Driver name: `ethercat`.
+- Deterministic process-image mapping for module-chain profiles (including
+  `EK1100` + digital I/O modules such as `EL1008` / `EL2008`).
+- Startup discovery diagnostics emit discovered module summary and expected
+  process-image sizes.
+- Cycle-time health telemetry upgrades driver status to **degraded** when cycle
+  read/write exceeds configured warning threshold.
+- Non-mock adapters are backed by EtherCrab hardware transport on unix targets.
+- Deterministic `adapter = "mock"` mode is available for CI/offline validation.
+- Explicit v1 non-goals: no functional safety/SIL claims and no advanced motion
+  profile support.
+
 Protocol roadmap priority after OPC UA baseline:
 - First: MQTT
 - Next: EtherNet/IP

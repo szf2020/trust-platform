@@ -84,12 +84,15 @@ fn build_driver_params(
     if driver.eq_ignore_ascii_case("mqtt") {
         return Ok(default_mqtt_params());
     }
+    if driver.eq_ignore_ascii_case("ethercat") {
+        return Ok(default_ethercat_params());
+    }
     if driver.eq_ignore_ascii_case("simulated") || driver.eq_ignore_ascii_case("loopback") {
         return Ok(toml::Value::Table(toml::map::Map::new()));
     }
     Err(RuntimeError::InvalidConfig(
         format!(
-            "invalid I/O driver '{driver}'. Expected: loopback, gpio, simulated, modbus-tcp, or mqtt."
+            "invalid I/O driver '{driver}'. Expected: loopback, gpio, simulated, modbus-tcp, mqtt, or ethercat."
         )
         .into(),
     ))
@@ -135,6 +138,34 @@ fn default_mqtt_params() -> toml::Value {
     params.insert("reconnect_ms".into(), toml::Value::Integer(500));
     params.insert("keep_alive_s".into(), toml::Value::Integer(5));
     params.insert("allow_insecure_remote".into(), toml::Value::Boolean(false));
+    toml::Value::Table(params)
+}
+
+fn default_ethercat_params() -> toml::Value {
+    let mut params = toml::map::Map::new();
+    params.insert("adapter".into(), toml::Value::String("mock".to_string()));
+    params.insert("timeout_ms".into(), toml::Value::Integer(250));
+    params.insert("cycle_warn_ms".into(), toml::Value::Integer(5));
+    params.insert("on_error".into(), toml::Value::String("fault".to_string()));
+    params.insert(
+        "modules".into(),
+        toml::Value::Array(vec![
+            toml::Value::Table(toml::map::Map::from_iter([
+                ("model".into(), toml::Value::String("EK1100".to_string())),
+                ("slot".into(), toml::Value::Integer(0)),
+            ])),
+            toml::Value::Table(toml::map::Map::from_iter([
+                ("model".into(), toml::Value::String("EL1008".to_string())),
+                ("slot".into(), toml::Value::Integer(1)),
+                ("channels".into(), toml::Value::Integer(8)),
+            ])),
+            toml::Value::Table(toml::map::Map::from_iter([
+                ("model".into(), toml::Value::String("EL2008".to_string())),
+                ("slot".into(), toml::Value::Integer(2)),
+                ("channels".into(), toml::Value::Integer(8)),
+            ])),
+        ]),
+    );
     toml::Value::Table(params)
 }
 

@@ -8,6 +8,8 @@ mod modbus;
 pub use modbus::ModbusTcpDriver;
 mod mqtt;
 pub use mqtt::MqttIoDriver;
+mod ethercat;
+pub use ethercat::EthercatIoDriver;
 mod gpio;
 mod loopback;
 mod registry;

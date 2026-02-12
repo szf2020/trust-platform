@@ -104,13 +104,16 @@ Key sections:
 
 See `docs/guides/PLC_IO_BINDING_GUIDE.md` for full examples.
 
-Supported I/O backends are `loopback`, `simulated`, `gpio`, `modbus-tcp`, and `mqtt`.
+Supported I/O backends are `loopback`, `simulated`, `gpio`, `modbus-tcp`, `mqtt`, and `ethercat`.
 
 `io.toml` supports:
 - single-driver form: `io.driver` + `io.params`
 - multi-driver form: `io.drivers = [{ name = \"...\", params = {...} }, ...]`
 
 Use one form at a time (do not mix `io.driver` with `io.drivers`).
+
+For EtherCAT backend scope and setup details, see:
+`docs/guides/ETHERCAT_BACKEND_V1.md`.
 
 ## Browser UI (Operations)
 

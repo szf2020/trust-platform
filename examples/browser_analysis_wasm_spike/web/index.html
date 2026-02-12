@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>truST Browser Analysis Spike</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f6f4ef;
+        --panel: #fffdf8;
+        --ink: #1f2328;
+        --muted: #616670;
+        --accent: #0a5c36;
+        --line: #d7d5cd;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font: 14px/1.45 "IBM Plex Sans", "Segoe UI", sans-serif;
+        color: var(--ink);
+        background: radial-gradient(
+            800px 300px at 15% -10%,
+            rgba(44, 152, 97, 0.15),
+            transparent 65%
+          ),
+          var(--bg);
+      }
+
+      .page {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 20px 16px 30px;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font: 700 26px/1.2 "IBM Plex Sans", "Segoe UI", sans-serif;
+      }
+
+      p {
+        margin: 0 0 14px;
+        color: var(--muted);
+      }
+
+      .status {
+        margin: 12px 0 16px;
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #f8fdf9;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+      }
+
+      .panel {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--panel);
+        padding: 12px;
+      }
+
+      label {
+        display: block;
+        margin: 0 0 6px;
+        font-weight: 600;
+      }
+
+      input,
+      textarea,
+      button {
+        font: inherit;
+      }
+
+      input,
+      textarea {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        padding: 8px 10px;
+      }
+
+      textarea {
+        min-height: 280px;
+        resize: vertical;
+        font-family: "IBM Plex Mono", "Fira Code", monospace;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+
+      .buttons {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 10px;
+      }
+
+      button {
+        border: 1px solid #0f6a41;
+        background: var(--accent);
+        color: #fff;
+        border-radius: 8px;
+        padding: 8px 12px;
+        cursor: pointer;
+      }
+
+      button.secondary {
+        background: #fff;
+        color: var(--ink);
+        border: 1px solid var(--line);
+      }
+
+      pre {
+        margin: 0;
+        min-height: 280px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #0f1720;
+        color: #def6e6;
+        padding: 10px;
+        overflow: auto;
+        font: 13px/1.45 "IBM Plex Mono", "Fira Code", monospace;
+      }
+
+      @media (max-width: 960px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <h1>truST Browser Analysis Spike</h1>
+      <p>
+        Worker-backed WASM diagnostics, hover, and completion proof of concept.
+      </p>
+      <div class="status" id="status">Worker state: booting...</div>
+
+      <section class="layout">
+        <div class="panel">
+          <label for="document-uri">Document URI</label>
+          <input id="document-uri" value="memory:///main.st" />
+
+          <label for="source">Source</label>
+          <textarea id="source">PROGRAM Main
+VAR
+    Counter : INT;
+END_VAR
+
+Counter := Counter + 1;
+END_PROGRAM
+</textarea>
+
+          <div class="row">
+            <div>
+              <label for="line">Line</label>
+              <input id="line" type="number" min="0" value="5" />
+            </div>
+            <div>
+              <label for="character">Character</label>
+              <input id="character" type="number" min="0" value="2" />
+            </div>
+          </div>
+
+          <div class="buttons">
+            <button id="apply">Apply Documents</button>
+            <button id="diagnostics">Diagnostics</button>
+            <button id="hover">Hover</button>
+            <button id="completion">Completion</button>
+            <button id="status-btn" class="secondary">Status</button>
+            <button id="cancel" class="secondary">Cancel Last Request</button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <label for="output">Response</label>
+          <pre id="output"></pre>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
