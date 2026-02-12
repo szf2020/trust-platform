@@ -16,6 +16,8 @@ const MITSUBISHI_GXWORKS3_V1_MAIN: &str =
     include_str!("../../../examples/mitsubishi_gxworks3_v1/src/Main.st");
 const ETHERCAT_EK1100_ELX008_V1_MAIN: &str =
     include_str!("../../../examples/ethercat_ek1100_elx008_v1/src/Main.st");
+const OPENPLC_INTEROP_V1_MAIN: &str =
+    include_str!("../../../examples/openplc_interop_v1/sources/main.st");
 
 const TUTORIALS: [(&str, &str); 9] = [
     ("01_hello_counter.st", HELLO_COUNTER),
@@ -67,6 +69,14 @@ fn ethercat_ek1100_elx008_v1_example_parse_typecheck_and_compile_to_bytecode() {
         "ethercat_ek1100_elx008_v1/Main.st",
     )
     .expect("bytecode compile failed for EtherCAT EK1100/ELx008 v1 example");
+}
+
+#[test]
+fn openplc_interop_v1_example_parse_typecheck_and_compile_to_bytecode() {
+    TestHarness::from_source(OPENPLC_INTEROP_V1_MAIN)
+        .expect("runtime compile failed for OpenPLC interop v1 example");
+    bytecode_module_from_source_with_path(OPENPLC_INTEROP_V1_MAIN, "openplc_interop_v1/main.st")
+        .expect("bytecode compile failed for OpenPLC interop v1 example");
 }
 
 #[test]

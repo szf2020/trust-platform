@@ -28,6 +28,10 @@ and known gaps are documented in:
 ST-complete import/export walkthrough example:
 `examples/plcopen_xml_st_complete/README.md`.
 
+OpenPLC ST-focused migration guide and end-to-end sample bundle:
+- `docs/guides/OPENPLC_INTEROP_V1.md`
+- `examples/openplc_interop_v1/README.md`
+
 ## Vendor Library Compatibility
 
 Vendor library baseline shim coverage and compatibility matrix are documented in:

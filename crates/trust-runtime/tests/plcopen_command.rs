@@ -403,6 +403,76 @@ fn plcopen_import_json_detects_openplc_ecosystem_and_shims() {
 }
 
 #[test]
+fn plcopen_openplc_example_bundle_import_export_smoke() {
+    let example_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("examples")
+        .join("openplc_interop_v1");
+    let fixture = example_root.join("interop/openplc.xml");
+    assert!(fixture.is_file(), "expected OpenPLC example fixture");
+
+    let import_project = unique_temp_dir("plcopen-cli-openplc-example-import");
+    let import = Command::new(env!("CARGO_BIN_EXE_trust-runtime"))
+        .args([
+            "plcopen",
+            "import",
+            "--input",
+            fixture.to_str().expect("fixture utf-8"),
+            "--project",
+            import_project.to_str().expect("project utf-8"),
+            "--json",
+        ])
+        .output()
+        .expect("run openplc example import");
+    assert!(
+        import.status.success(),
+        "expected example import success, stderr was:\n{}",
+        String::from_utf8_lossy(&import.stderr)
+    );
+
+    let import_json: serde_json::Value =
+        serde_json::from_slice(&import.stdout).expect("parse import json");
+    assert_eq!(import_json["detected_ecosystem"], "openplc");
+    assert!(import_json["applied_library_shims"]
+        .as_array()
+        .expect("applied shims array")
+        .iter()
+        .any(|entry| entry["vendor"] == "openplc"
+            && entry["source_symbol"] == "R_EDGE"
+            && entry["replacement_symbol"] == "R_TRIG"));
+
+    let output_xml = import_project.join("interop/example-roundtrip.xml");
+    let export = Command::new(env!("CARGO_BIN_EXE_trust-runtime"))
+        .args([
+            "plcopen",
+            "export",
+            "--project",
+            import_project.to_str().expect("project utf-8"),
+            "--output",
+            output_xml.to_str().expect("output utf-8"),
+            "--json",
+        ])
+        .output()
+        .expect("run openplc example export");
+    assert!(
+        export.status.success(),
+        "expected example export success, stderr was:\n{}",
+        String::from_utf8_lossy(&export.stderr)
+    );
+    assert!(
+        output_xml.is_file(),
+        "expected example roundtrip xml output"
+    );
+    assert!(
+        output_xml.with_extension("source-map.json").is_file(),
+        "expected source-map sidecar"
+    );
+
+    let _ = std::fs::remove_dir_all(import_project);
+}
+
+#[test]
 fn plcopen_import_json_reports_applied_vendor_library_shims() {
     let project = unique_temp_dir("plcopen-cli-shim-import");
     std::fs::create_dir_all(&project).expect("create temp project");

@@ -82,6 +82,10 @@ For multi-vendor export adapter manual steps/limitations, see:
 
 `docs/guides/PLCOPEN_EXPORT_ADAPTERS_V1.md`
 
+For OpenPLC-specific migration expectations and sample flow, see:
+
+`docs/guides/OPENPLC_INTEROP_V1.md`
+
 Start runtime:
 ```
 trust-runtime --project <project-folder>

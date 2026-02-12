@@ -6,10 +6,19 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 
 ## [Unreleased]
 
-Target release: `v0.7.10`
+Target release: `v0.7.11`
 
 ### Added
 
+- OpenPLC Interop v1 deliverable closure:
+  - Added dedicated OpenPLC migration guide: `docs/guides/OPENPLC_INTEROP_V1.md`.
+  - Added end-to-end OpenPLC sample bundle with native/export/import walkthrough:
+    - `examples/openplc_interop_v1/README.md`
+    - `examples/openplc_interop_v1/interop/openplc.xml`
+    - `examples/openplc_interop_v1/sources/main.st`
+  - Added regression coverage to keep the OpenPLC sample bundle executable in CI:
+    - `crates/trust-runtime/tests/plcopen_command.rs`
+    - `crates/trust-runtime/tests/tutorial_examples.rs`
 - truST Browser Analysis Spike (Deliverable 10):
   - Added new browser/WASM analysis adapter crate `crates/trust-wasm-analysis/` exposing deterministic diagnostics, hover, and completion APIs for virtual-document analysis.
   - Added JSON boundary wrapper `WasmAnalysisEngine` for worker/browser transport integration (`applyDocumentsJson`, `diagnosticsJson`, `hoverJson`, `completionJson`, `statusJson`).
