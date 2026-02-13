@@ -21,6 +21,21 @@ async function readText(uri: vscode.Uri): Promise<string> {
   return Buffer.from(data).toString("utf8");
 }
 
+async function resolveImportedMainSource(
+  projectUri: vscode.Uri
+): Promise<vscode.Uri | undefined> {
+  const candidates = [
+    vscode.Uri.joinPath(projectUri, "src", "Main.st"),
+    vscode.Uri.joinPath(projectUri, "sources", "Main.st"),
+  ];
+  for (const candidate of candidates) {
+    if (await pathExists(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
 function openPlcFixtureXml(): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://www.plcopen.org/xml/tc6_0200">
@@ -93,7 +108,7 @@ suite("PLCopen import command (VS Code)", function () {
 
     assert.strictEqual(imported, true, "Expected PLCopen import to succeed.");
 
-    const mainSourceUri = vscode.Uri.joinPath(targetUri, "sources", "Main.st");
+    const mainSourceUri = await resolveImportedMainSource(targetUri);
     const migrationReportUri = vscode.Uri.joinPath(
       targetUri,
       "interop",
@@ -101,7 +116,7 @@ suite("PLCopen import command (VS Code)", function () {
     );
 
     assert.strictEqual(
-      await pathExists(mainSourceUri),
+      mainSourceUri !== undefined,
       true,
       "Expected imported Main.st source file."
     );
@@ -190,10 +205,7 @@ suite("PLCopen import command (VS Code)", function () {
 
     assert.strictEqual(imported, false, "Expected overwrite=false to stop import.");
     assert.strictEqual(await pathExists(sentinelUri), true);
-    assert.strictEqual(
-      await pathExists(vscode.Uri.joinPath(targetUri, "sources", "Main.st")),
-      false
-    );
+    assert.strictEqual(await resolveImportedMainSource(targetUri), undefined);
   });
 
   test("missing input file is rejected", async () => {

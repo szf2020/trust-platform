@@ -146,6 +146,10 @@ fn print_export_report(report: &PlcopenExportReport) {
         report.source_count
     );
     println!("Source map: {}", report.source_map_path.display());
+    if let Some(bundle_dir) = &report.siemens_scl_bundle_dir {
+        println!("Siemens SCL bundle: {}", bundle_dir.display());
+        println!("Siemens SCL files: {}", report.siemens_scl_files.len());
+    }
     if let Some(adapter_report_path) = &report.adapter_report_path {
         println!("Adapter report: {}", adapter_report_path.display());
     }

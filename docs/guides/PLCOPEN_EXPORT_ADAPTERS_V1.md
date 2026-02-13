@@ -27,11 +27,17 @@ For vendor targets (`ab`, `siemens`, `schneider`), export writes:
   - `<output>.source-map.json`
 - Adapter report sidecar:
   - `<output>.adapter-report.json`
+- Siemens target only (`--target siemens`):
+  - Siemens SCL source bundle directory:
+    - `<output>.scl/`
+  - Includes generated `.scl` source files ready for TIA External source import.
 
 JSON report fields (export):
 
 - `target`
 - `adapter_report_path`
+- `siemens_scl_bundle_dir` (Siemens target only)
+- `siemens_scl_files[]` (Siemens target only)
 - `adapter_diagnostics[]`
 - `adapter_manual_steps[]`
 - `adapter_limitations[]`
@@ -58,10 +64,12 @@ These diagnostics are advisory migration evidence, not semantic-equivalence proo
 
 ### Siemens (`siemens`)
 
-1. Import PLCopen artifact through your Siemens interchange path.
-2. Map tasks/program instances to OB scheduling in TIA Portal.
-3. Reconcile marker/address mapping with hardware configuration.
-4. Validate migrated behavior with runtime/conformance tests.
+1. Import generated `.scl` sources from `<output>.scl/` via TIA Portal:
+   External source files -> Add new external file.
+2. Generate blocks from imported source files.
+3. Map tasks/program instances to OB scheduling in TIA Portal.
+4. Reconcile marker/address mapping with hardware configuration.
+5. Validate migrated behavior with runtime/conformance tests.
 
 ### Schneider (`schneider`)
 
@@ -76,3 +84,9 @@ These diagnostics are advisory migration evidence, not semantic-equivalence proo
 - No automatic import of hardware topology/device trees/safety metadata.
 - No semantic equivalence guarantees for vendor AOI/library internals.
 - ST-only contract remains in effect (no FBD/LD/SFC semantics).
+
+## Siemens Tutorial
+
+For a full step-by-step Siemens flow (command + TIA UI path), see:
+
+- `docs/guides/SIEMENS_TIA_SCL_IMPORT_TUTORIAL.md`

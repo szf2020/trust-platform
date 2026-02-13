@@ -370,6 +370,84 @@ END_CONFIGURATION
 }
 
 #[test]
+fn plcopen_export_siemens_target_generates_scl_bundle() {
+    let project = unique_temp_dir("plcopen-cli-target-export-siemens");
+    std::fs::create_dir_all(project.join("sources")).expect("create sources");
+    std::fs::write(
+        project.join("sources/main.st"),
+        r#"
+PROGRAM Main
+VAR
+    Counter : INT := 0;
+END_VAR
+Counter := Counter + 1;
+END_PROGRAM
+"#,
+    )
+    .expect("write source");
+
+    let export = Command::new(env!("CARGO_BIN_EXE_trust-runtime"))
+        .args([
+            "plcopen",
+            "export",
+            "--project",
+            project.to_str().expect("project utf-8"),
+            "--target",
+            "siemens",
+            "--json",
+        ])
+        .output()
+        .expect("run plcopen export siemens json");
+    assert!(
+        export.status.success(),
+        "expected siemens target export success, stderr was:\n{}",
+        String::from_utf8_lossy(&export.stderr)
+    );
+
+    let export_json: serde_json::Value =
+        serde_json::from_slice(&export.stdout).expect("parse export JSON report");
+    assert_eq!(export_json["target"], "siemens-tia");
+    assert!(export_json["siemens_scl_bundle_dir"].is_string());
+    assert!(export_json["siemens_scl_files"].is_array());
+
+    let output_xml = project.join("interop/plcopen.siemens.xml");
+    assert!(output_xml.is_file(), "expected target default output xml");
+
+    let bundle_dir = export_json["siemens_scl_bundle_dir"]
+        .as_str()
+        .expect("siemens scl bundle dir");
+    assert!(
+        std::path::Path::new(bundle_dir).is_dir(),
+        "expected siemens scl bundle directory"
+    );
+    let scl_files = export_json["siemens_scl_files"]
+        .as_array()
+        .expect("siemens scl files");
+    assert!(
+        !scl_files.is_empty(),
+        "expected generated siemens scl files"
+    );
+
+    let mut found_main_ob = false;
+    for entry in scl_files {
+        let path = entry.as_str().expect("siemens scl file path");
+        assert!(
+            std::path::Path::new(path).is_file(),
+            "expected generated siemens scl file to exist: {path}"
+        );
+        if path.ends_with("_ob_Main.scl") {
+            let text = std::fs::read_to_string(path).expect("read main ob file");
+            assert!(text.contains("ORGANIZATION_BLOCK \"Main\""));
+            assert!(text.contains("END_ORGANIZATION_BLOCK"));
+            found_main_ob = true;
+        }
+    }
+    assert!(found_main_ob, "expected converted Main OB Siemens SCL file");
+
+    let _ = std::fs::remove_dir_all(project);
+}
+
+#[test]
 fn plcopen_import_json_detects_openplc_ecosystem_and_shims() {
     let import_project = unique_temp_dir("plcopen-cli-openplc-import");
     let fixture = fixture_path("openplc.xml");

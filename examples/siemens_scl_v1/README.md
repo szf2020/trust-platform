@@ -9,6 +9,7 @@ compare it against a generic profile.
 - Siemens profile formatting/diagnostics behavior
 - Hover/completion resolution for `#` symbols
 - Runtime/debug launch from this example project
+- Direct Siemens `.scl` export for TIA External source import
 
 ## Files
 
@@ -52,7 +53,22 @@ trust-runtime validate --project examples/siemens_scl_v1
 3. Toggle `%IX0.0` (mapped pulse input) in Runtime Panel.
 4. Observe `%QX0.0` transition as count indicator.
 
+## Step 6: Export Direct Siemens `.scl` Files for TIA
+
+```bash
+trust-runtime plcopen export --project examples/siemens_scl_v1 --target siemens --json
+```
+
+Generated importable source files:
+
+- `examples/siemens_scl_v1/interop/plcopen.siemens.xml.scl/*.scl`
+
+Full TIA import walkthrough:
+
+- `docs/guides/SIEMENS_TIA_SCL_IMPORT_TUTORIAL.md`
+
 ## Pitfalls
 
 - Forgetting to revert profile back to `siemens` after comparison.
 - Assuming generic profile accepts Siemens `#` style everywhere.
+- Assuming task/resource wiring is auto-mapped in TIA after source import.

@@ -28,7 +28,7 @@ multi-vendor export adapters).
 | Vendor extension preservation (`addData`) | partial | Preserved/re-injectable, but not semantically interpreted. |
 | Vendor ecosystem migration heuristics | partial | Advisory signal only; not semantic equivalence. |
 | Vendor library shim normalization | partial | Selected aliases are mapped to IEC FB names during import; each mapping is reported. |
-| Multi-vendor export adapters (`--target ab|siemens|schneider`) | partial | Exports PLCopen XML + target diagnostics/manual-step report; native vendor project package generation is out of scope in v1. |
+| Multi-vendor export adapters (`--target ab|siemens|schneider`) | partial | Exports PLCopen XML + target diagnostics/manual-step report; Siemens target also emits direct `.scl` source bundle; native vendor project package generation is out of scope in v1. |
 | Graphical bodies (FBD/LD/SFC) | unsupported | ST-complete contract remains ST-only by product decision. |
 | Vendor AOI/library internal semantics | unsupported | Advanced behavior remains manual migration work beyond symbol-level shims. |
 
@@ -39,6 +39,8 @@ includes target-specific adapter fields:
 
 - `target`
 - `adapter_report_path`
+- `siemens_scl_bundle_dir` (Siemens target only)
+- `siemens_scl_files[]` (Siemens target only)
 - `adapter_diagnostics[]`:
   - `code`
   - `severity`
@@ -53,6 +55,8 @@ The command also writes:
   - `interop/plcopen.ab.xml`
   - `interop/plcopen.siemens.xml`
   - `interop/plcopen.schneider.xml`
+- Siemens-target direct source bundle:
+  - `<output-file>.scl/*.scl`
 - sidecar adapter report:
   - `<output-file>.adapter-report.json`
 

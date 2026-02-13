@@ -6,10 +6,15 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 
 ## [Unreleased]
 
-Target release: `v0.7.14`
+Target release: `v0.7.15`
 
 ### Added
 
+- Direct Siemens TIA source handoff via export adapters:
+  - `trust-runtime plcopen export --target siemens` now emits a Siemens SCL sidecar bundle (`<output>.scl/*.scl`) alongside PLCopen XML.
+  - Siemens-target export reports now include `siemens_scl_bundle_dir` and `siemens_scl_files[]` for automation and CI evidence.
+  - Added dedicated Siemens import tutorial with exact TIA path (`External source files` -> `Add new external file` -> `Generate blocks`): `docs/guides/SIEMENS_TIA_SCL_IMPORT_TUTORIAL.md`.
+  - Added runtime + CLI regression coverage for Siemens SCL bundle generation and `PROGRAM` to `ORGANIZATION_BLOCK` conversion.
 - VS Code PLCopen import workflow:
   - Added command `Structured Text: Import PLCopen XML` (`trust-lsp.plcopen.import`) for CLI-backed PLCopen project import from the editor.
   - Command flow prompts for input XML + target project folder, validates conflict paths, runs `trust-runtime plcopen import --json`, and offers quick access to the generated migration report.

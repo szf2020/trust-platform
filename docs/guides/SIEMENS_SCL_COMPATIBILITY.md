@@ -47,6 +47,13 @@ With `vendor_profile = "siemens"` default warning behavior is:
 - Siemens project metadata and hardware configuration semantics are out of scope.
 - Siemens-specific pragmas/attributes are parsed as pragmas (trivia), not executed semantics.
 
+## Related Runtime Export Path
+
+For direct Siemens source handoff to TIA via external source files:
+
+- `trust-runtime plcopen export --target siemens` emits a `.scl` bundle sidecar.
+- Tutorial: `docs/guides/SIEMENS_TIA_SCL_IMPORT_TUTORIAL.md`
+
 See `docs/internal/standards/IEC_DEVIATIONS.md` for the formal deviation record.
 
 ## Regression Coverage
