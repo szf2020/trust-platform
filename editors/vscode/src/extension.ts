@@ -14,6 +14,7 @@ import { augmentDiagnostic } from "./diagnostics";
 import { defaultRuntimeControlEndpoint } from "./runtimeDefaults";
 import { registerNewProjectCommand } from "./newProject";
 import { registerPlcopenImportCommand } from "./plcopenImport";
+import { registerPlcopenExportCommand } from "./plcopenExport";
 import { registerStTestIntegration } from "./stTests";
 import {
   registerNamespaceMoveCommand,
@@ -219,6 +220,7 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(client);
   registerNewProjectCommand(context);
   registerPlcopenImportCommand(context);
+  registerPlcopenExportCommand(context);
   registerNamespaceMoveCommand(context, client);
   registerNamespaceMoveCodeActions(context);
   registerNamespaceMoveContext(context);

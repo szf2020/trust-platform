@@ -31,6 +31,7 @@
     "onDebug:structured-text",
     "onCommand:trust-lsp.newProject",
     "onCommand:trust-lsp.plcopen.import",
+    "onCommand:trust-lsp.plcopen.export",
     "onCommand:trust-lsp.debug.openIoPanel",
     "onCommand:trust-lsp.hmi.openPreview",
     "onCommand:trust-lsp.debug.reload",
@@ -1629,6 +1630,11 @@
       {
         "command": "trust-lsp.plcopen.import",
         "title": "Structured Text: Import PLCopen XML",
+        "category": "Structured Text"
+      },
+      {
+        "command": "trust-lsp.plcopen.export",
+        "title": "Structured Text: Export PLCopen XML",
         "category": "Structured Text"
       },
       {
