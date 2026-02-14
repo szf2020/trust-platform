@@ -361,7 +361,7 @@ struct PlcopenExportAdapterContract {
     limitations: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PlcopenPouType {
     Program,
     Function,
@@ -374,6 +374,22 @@ impl PlcopenPouType {
             Self::Program => "program",
             Self::Function => "function",
             Self::FunctionBlock => "functionBlock",
+        }
+    }
+
+    fn declaration_keyword(self) -> &'static str {
+        match self {
+            Self::Program => "PROGRAM",
+            Self::Function => "FUNCTION",
+            Self::FunctionBlock => "FUNCTION_BLOCK",
+        }
+    }
+
+    fn end_keyword(self) -> &'static str {
+        match self {
+            Self::Program => "END_PROGRAM",
+            Self::Function => "END_FUNCTION",
+            Self::FunctionBlock => "END_FUNCTION_BLOCK",
         }
     }
 
@@ -975,6 +991,7 @@ pub fn import_xml_to_project(
 
     let source_map = parse_embedded_source_map(root);
     let detected_ecosystem = detect_vendor_ecosystem(root, &xml_text);
+    let promoted_program_pous = detect_program_pous_used_as_types(root);
 
     let sources_root = resolve_or_create_source_root(project_root)?;
 
@@ -1057,7 +1074,7 @@ pub fn import_xml_to_project(
             continue;
         };
 
-        let Some(pou_type) = PlcopenPouType::from_xml(&pou_type_raw) else {
+        let Some(mut pou_type) = PlcopenPouType::from_xml(&pou_type_raw) else {
             warnings.push(format!(
                 "skipping pou '{}': unsupported pouType '{}'",
                 name, pou_type_raw
@@ -1082,29 +1099,52 @@ pub fn import_xml_to_project(
             continue;
         };
 
-        let Some(body) = st_body else {
-            warnings.push(format!("skipping pou '{}': missing body/ST", name));
-            unsupported_diagnostics.push(unsupported_diagnostic(
-                "PLCO204",
-                "warning",
-                "pou/body",
-                "POU skipped because body/ST payload is missing",
-                Some(name.clone()),
-                "POU skipped; provide an ST body in PLCopen XML",
+        if pou_type == PlcopenPouType::Program
+            && promoted_program_pous.contains(&name.to_ascii_lowercase())
+        {
+            pou_type = PlcopenPouType::FunctionBlock;
+            warnings.push(format!(
+                "promoted pou '{}' from program to functionBlock because it is referenced as a type",
+                name
             ));
-            loss_warnings += 1;
-            migration_entries.push(PlcopenMigrationEntry {
-                name,
-                pou_type_raw: Some(pou_type_raw),
-                resolved_pou_type: Some(pou_type.as_xml().to_string()),
-                status: "skipped".to_string(),
-                reason: Some("missing body/ST".to_string()),
-            });
-            continue;
-        };
+            unsupported_diagnostics.push(unsupported_diagnostic(
+                "PLCO210",
+                "info",
+                "pou/pouType",
+                "POU pouType promoted from program to functionBlock based on cross-reference usage",
+                Some(name.clone()),
+                "Review promoted POU kind for semantic parity with the source vendor model",
+            ));
+        }
 
-        let body = body.trim();
-        if body.is_empty() {
+        let Some(reconstructed_source) = synthesize_import_pou_source(
+            pou,
+            pou_type,
+            &name,
+            st_body.as_deref(),
+            &mut warnings,
+            &mut unsupported_diagnostics,
+        ) else {
+            if st_body.is_none() {
+                warnings.push(format!("skipping pou '{}': missing body/ST", name));
+                unsupported_diagnostics.push(unsupported_diagnostic(
+                    "PLCO204",
+                    "warning",
+                    "pou/body",
+                    "POU skipped because body/ST payload is missing",
+                    Some(name.clone()),
+                    "POU skipped; provide an ST body in PLCopen XML",
+                ));
+                loss_warnings += 1;
+                migration_entries.push(PlcopenMigrationEntry {
+                    name,
+                    pou_type_raw: Some(pou_type_raw),
+                    resolved_pou_type: Some(pou_type.as_xml().to_string()),
+                    status: "skipped".to_string(),
+                    reason: Some("missing body/ST".to_string()),
+                });
+                continue;
+            }
             warnings.push(format!("skipping pou '{}': empty ST body", name));
             unsupported_diagnostics.push(unsupported_diagnostic(
                 "PLCO205",
@@ -1123,13 +1163,12 @@ pub fn import_xml_to_project(
                 reason: Some("empty ST body".to_string()),
             });
             continue;
-        }
+        };
 
         let candidate = unique_source_path(&sources_root, &name, &mut seen_files);
 
-        let normalized_body = normalize_body_text(body);
         let (shimmed_body, shim_applications) =
-            apply_vendor_library_shims(&normalized_body, &detected_ecosystem);
+            apply_vendor_library_shims(&reconstructed_source, &detected_ecosystem);
         for application in shim_applications {
             warnings.push(format!(
                 "applied vendor library shim in pou '{}': {} -> {} ({} occurrence(s))",
@@ -1886,6 +1925,309 @@ fn extract_text_content(node: roxmltree::Node<'_, '_>) -> Option<String> {
         None
     } else {
         Some(trimmed.to_string())
+    }
+}
+
+#[derive(Debug, Clone)]
+struct InterfaceVarSection {
+    keyword: &'static str,
+    declarations: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct PouInterfaceMetadata {
+    function_return_type: Option<String>,
+    header_hint: Option<String>,
+    sections: Vec<InterfaceVarSection>,
+}
+
+impl PouInterfaceMetadata {
+    fn has_details(&self) -> bool {
+        self.function_return_type.is_some()
+            || self.header_hint.is_some()
+            || self
+                .sections
+                .iter()
+                .any(|section| !section.declarations.is_empty())
+    }
+}
+
+fn detect_program_pous_used_as_types(root: roxmltree::Node<'_, '_>) -> HashSet<String> {
+    let mut program_names = HashSet::new();
+    for pou in root
+        .descendants()
+        .filter(|node| is_element_named_ci(*node, "pou"))
+    {
+        let Some(pou_name) = extract_pou_name(pou) else {
+            continue;
+        };
+        let Some(raw_type) = attribute_ci(pou, "pouType").or_else(|| attribute_ci(pou, "type"))
+        else {
+            continue;
+        };
+        if PlcopenPouType::from_xml(&raw_type).is_some_and(|kind| kind == PlcopenPouType::Program) {
+            program_names.insert(pou_name.to_ascii_lowercase());
+        }
+    }
+
+    if program_names.is_empty() {
+        return HashSet::new();
+    }
+
+    let mut promoted = HashSet::new();
+    for derived in root
+        .descendants()
+        .filter(|node| is_element_named_ci(*node, "derived"))
+    {
+        let Some(name) = attribute_ci(derived, "name")
+            .map(|value| value.trim().to_ascii_lowercase())
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        if program_names.contains(&name) {
+            promoted.insert(name);
+        }
+    }
+    promoted
+}
+
+fn synthesize_import_pou_source(
+    pou_node: roxmltree::Node<'_, '_>,
+    pou_type: PlcopenPouType,
+    pou_name: &str,
+    st_body: Option<&str>,
+    warnings: &mut Vec<String>,
+    unsupported_diagnostics: &mut Vec<PlcopenUnsupportedDiagnostic>,
+) -> Option<String> {
+    let normalized_body = st_body.map(normalize_body_text).unwrap_or_default();
+    let has_body = !normalized_body.trim().is_empty();
+    if has_body && source_has_top_level_pou_declaration(&normalized_body, pou_type) {
+        return Some(normalized_body);
+    }
+
+    let metadata = extract_pou_interface_metadata(pou_node, pou_type);
+    if !has_body && !metadata.has_details() {
+        return None;
+    }
+
+    let header = render_import_pou_header(
+        pou_type,
+        pou_name,
+        &metadata,
+        warnings,
+        unsupported_diagnostics,
+    )?;
+    let mut synthesized = String::new();
+    synthesized.push_str(&header);
+    synthesized.push('\n');
+
+    for section in &metadata.sections {
+        if section.declarations.is_empty() {
+            continue;
+        }
+        synthesized.push_str(section.keyword);
+        synthesized.push('\n');
+        for declaration in &section.declarations {
+            synthesized.push_str(declaration);
+            synthesized.push('\n');
+        }
+        synthesized.push_str("END_VAR\n");
+    }
+
+    if has_body {
+        synthesized.push_str(normalized_body.trim_end());
+        synthesized.push('\n');
+        warnings.push(format!(
+            "pou '{}' body omitted a top-level declaration wrapper; synthesized '{}'",
+            pou_name,
+            pou_type.declaration_keyword()
+        ));
+        unsupported_diagnostics.push(unsupported_diagnostic(
+            "PLCO207",
+            "info",
+            "pou/body/ST",
+            "POU ST body lacked declaration wrapper; importer synthesized one",
+            Some(pou_name.to_string()),
+            "Review synthesized declaration sections for vendor-specific details",
+        ));
+    } else {
+        warnings.push(format!(
+            "pou '{}' had missing/empty ST body; synthesized declaration shell from interface metadata",
+            pou_name
+        ));
+        unsupported_diagnostics.push(unsupported_diagnostic(
+            "PLCO208",
+            "info",
+            "pou/interface",
+            "POU body missing or empty; importer synthesized a declaration shell",
+            Some(pou_name.to_string()),
+            "Manual body implementation may still be required after import",
+        ));
+    }
+
+    synthesized.push_str(pou_type.end_keyword());
+    synthesized.push('\n');
+    Some(synthesized)
+}
+
+fn source_has_top_level_pou_declaration(source: &str, pou_type: PlcopenPouType) -> bool {
+    let parsed = parser::parse(source);
+    parsed
+        .syntax()
+        .children()
+        .any(|node| node_to_pou_type(&node).is_some_and(|candidate| candidate == pou_type))
+}
+
+fn extract_pou_interface_metadata(
+    pou_node: roxmltree::Node<'_, '_>,
+    _pou_type: PlcopenPouType,
+) -> PouInterfaceMetadata {
+    let mut metadata = PouInterfaceMetadata::default();
+
+    if let Some(interface) = first_child_element_ci(pou_node, "interface") {
+        metadata.function_return_type = first_child_element_ci(interface, "returnType")
+            .and_then(parse_type_expression_container)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+
+        let section_defs = [
+            ("inputVars", "VAR_INPUT"),
+            ("outputVars", "VAR_OUTPUT"),
+            ("inOutVars", "VAR_IN_OUT"),
+            ("externalVars", "VAR_EXTERNAL"),
+            ("localVars", "VAR"),
+            ("tempVars", "VAR_TEMP"),
+        ];
+        for (xml_name, st_keyword) in section_defs {
+            let mut declarations = Vec::new();
+            for section in interface
+                .children()
+                .filter(|child| is_element_named_ci(*child, xml_name))
+            {
+                declarations.extend(parse_interface_var_declarations(section));
+            }
+            if !declarations.is_empty() {
+                metadata.sections.push(InterfaceVarSection {
+                    keyword: st_keyword,
+                    declarations,
+                });
+            }
+        }
+    }
+
+    metadata.header_hint = extract_interface_plaintext_header(pou_node);
+    metadata
+}
+
+fn parse_interface_var_declarations(section: roxmltree::Node<'_, '_>) -> Vec<String> {
+    let mut declarations = Vec::new();
+    for variable in section
+        .children()
+        .filter(|child| is_element_named_ci(*child, "variable"))
+    {
+        let Some(name) = attribute_ci(variable, "name")
+            .or_else(|| {
+                variable
+                    .children()
+                    .find(|child| is_element_named_ci(*child, "name"))
+                    .and_then(extract_text_content)
+            })
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let Some(type_expr) = first_child_element_ci(variable, "type")
+            .and_then(parse_type_expression_container)
+            .or_else(|| {
+                first_child_element_ci(variable, "baseType")
+                    .and_then(parse_type_expression_container)
+            })
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let initializer = first_child_element_ci(variable, "initialValue")
+            .and_then(parse_initial_value)
+            .map_or_else(String::new, |value| format!(" := {value}"));
+        declarations.push(format!("    {name} : {type_expr}{initializer};"));
+    }
+    declarations
+}
+
+fn render_import_pou_header(
+    pou_type: PlcopenPouType,
+    pou_name: &str,
+    metadata: &PouInterfaceMetadata,
+    warnings: &mut Vec<String>,
+    unsupported_diagnostics: &mut Vec<PlcopenUnsupportedDiagnostic>,
+) -> Option<String> {
+    match pou_type {
+        PlcopenPouType::Program => Some(format!("PROGRAM {pou_name}")),
+        PlcopenPouType::FunctionBlock => Some(format!("FUNCTION_BLOCK {pou_name}")),
+        PlcopenPouType::Function => {
+            if let Some(return_type) = metadata.function_return_type.as_deref() {
+                return Some(format!("FUNCTION {pou_name} : {}", return_type.trim()));
+            }
+            if let Some(return_type) = metadata
+                .header_hint
+                .as_deref()
+                .and_then(parse_function_return_type_from_header)
+            {
+                return Some(format!("FUNCTION {pou_name} : {}", return_type.trim()));
+            }
+            warnings.push(format!(
+                "function '{}' did not provide an importable return type; defaulting to INT",
+                pou_name
+            ));
+            unsupported_diagnostics.push(unsupported_diagnostic(
+                "PLCO211",
+                "warning",
+                "pou/interface/returnType",
+                "Function return type missing in PLCopen interface metadata; defaulted to INT",
+                Some(pou_name.to_string()),
+                "Review the imported FUNCTION signature and adjust the return type manually",
+            ));
+            Some(format!("FUNCTION {pou_name} : INT"))
+        }
+    }
+}
+
+fn extract_interface_plaintext_header(pou_node: roxmltree::Node<'_, '_>) -> Option<String> {
+    const POU_PREFIXES: [&str; 3] = ["PROGRAM ", "FUNCTION_BLOCK ", "FUNCTION "];
+    for data in pou_node
+        .descendants()
+        .filter(|node| is_element_named_ci(*node, "data"))
+    {
+        let Some(name) = attribute_ci(data, "name") else {
+            continue;
+        };
+        if !name.to_ascii_lowercase().contains("interfaceasplaintext") {
+            continue;
+        }
+        let Some(text) = extract_text_content(data) else {
+            continue;
+        };
+        for line in text.lines() {
+            let trimmed = line.trim();
+            let upper = trimmed.to_ascii_uppercase();
+            if POU_PREFIXES.iter().any(|prefix| upper.starts_with(prefix)) {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn parse_function_return_type_from_header(header: &str) -> Option<String> {
+    let (_, suffix) = header.split_once(':')?;
+    let return_type = suffix.trim().trim_end_matches(';').trim().to_string();
+    if return_type.is_empty() {
+        None
+    } else {
+        Some(return_type)
     }
 }
 
@@ -4098,6 +4440,91 @@ END_PROGRAM
         assert!(shimmed.contains("SFB4 : BOOL := FALSE;"));
         assert!(shimmed.contains("DelayTimer : TON;"));
         assert!(shimmed.contains("SFB4 := TRUE;"));
+    }
+
+    #[test]
+    fn import_synthesizes_codesys_body_only_and_empty_plaintext_pous() {
+        let project = temp_dir("plcopen-import-codesys-shell");
+        let xml_path = project.join("input.xml");
+        write(
+            &xml_path,
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://www.plcopen.org/xml/tc6_0200">
+  <types>
+    <pous>
+      <pou name="PLC_PRG" pouType="program">
+        <interface>
+          <localVars>
+            <variable name="waterPump">
+              <type>
+                <derived name="Pump" />
+              </type>
+            </variable>
+          </localVars>
+        </interface>
+        <body>
+          <ST>
+            <xhtml xmlns="http://www.w3.org/1999/xhtml">waterpump();</xhtml>
+          </ST>
+        </body>
+      </pou>
+      <pou name="Pump" pouType="program">
+        <interface />
+        <body>
+          <ST>
+            <xhtml xmlns="http://www.w3.org/1999/xhtml" />
+          </ST>
+        </body>
+        <addData>
+          <data name="http://www.3s-software.com/plcopenxml/interfaceasplaintext" handleUnknown="implementation">
+            <InterfaceAsPlainText>
+              <xhtml xmlns="http://www.w3.org/1999/xhtml">PROGRAM Pump
+VAR
+END_VAR
+</xhtml>
+            </InterfaceAsPlainText>
+          </data>
+        </addData>
+      </pou>
+    </pous>
+  </types>
+</project>
+"#,
+        );
+
+        let report = import_xml_to_project(&xml_path, &project).expect("import XML");
+        assert_eq!(report.imported_pous, 2);
+        assert_eq!(report.discovered_pous, 2);
+        assert_eq!(report.source_coverage_percent, 100.0);
+        assert_eq!(report.compatibility_coverage.verdict, "full");
+        assert!(report
+            .unsupported_diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "PLCO207"
+                && diagnostic.pou.as_deref() == Some("PLC_PRG")));
+        assert!(report
+            .unsupported_diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "PLCO210"
+                && diagnostic.pou.as_deref() == Some("Pump")));
+        assert!(report
+            .unsupported_diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "PLCO208"
+                && diagnostic.pou.as_deref() == Some("Pump")));
+
+        let main = std::fs::read_to_string(project.join("src/PLC_PRG.st")).expect("read PLC_PRG");
+        assert!(main.contains("PROGRAM PLC_PRG"));
+        assert!(main.contains("waterPump : Pump;"));
+        assert!(main.contains("waterpump();"));
+        assert!(main.contains("END_PROGRAM"));
+
+        let pump = std::fs::read_to_string(project.join("src/Pump.st")).expect("read Pump");
+        assert!(pump.contains("FUNCTION_BLOCK Pump"));
+        assert!(pump.contains("END_FUNCTION_BLOCK"));
+        assert!(!pump.contains("PROGRAM Pump"));
+
+        let _ = std::fs::remove_dir_all(project);
     }
 
     #[test]

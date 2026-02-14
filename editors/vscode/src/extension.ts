@@ -14,6 +14,7 @@ import { augmentDiagnostic } from "./diagnostics";
 import { defaultRuntimeControlEndpoint } from "./runtimeDefaults";
 import { registerNewProjectCommand } from "./newProject";
 import { registerPlcopenImportCommand } from "./plcopenImport";
+import { registerPlcopenExportCommand } from "./plcopenExport";
 import { registerStTestIntegration } from "./stTests";
 import {
   registerNamespaceMoveCommand,
@@ -219,9 +220,32 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(client);
   registerNewProjectCommand(context);
   registerPlcopenImportCommand(context);
+  registerPlcopenExportCommand(context);
   registerNamespaceMoveCommand(context, client);
   registerNamespaceMoveCodeActions(context);
   registerNamespaceMoveContext(context);
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "trust-lsp.hmi.init",
+      async (input?: { style?: string } | string) => {
+        if (!client) {
+          throw new Error("Language client is not available.");
+        }
+        const rawStyle =
+          typeof input === "string"
+            ? input
+            : typeof input?.style === "string"
+              ? input.style
+              : "";
+        const style = rawStyle.trim().toLowerCase();
+        const args = style ? [{ style }] : [];
+        return client.sendRequest("workspace/executeCommand", {
+          command: "trust-lsp.hmiInit",
+          arguments: args,
+        });
+      }
+    )
+  );
 
   startClientWithRetry(context, config);
 
