@@ -63,24 +63,45 @@ fn normalize_runtime_endpoint_for_platform(project: &Path) {
     let Ok(raw) = std::fs::read_to_string(&runtime_path) else {
         return;
     };
-    if !raw.contains("endpoint = \"unix://") {
+
+    let Ok(mut doc) = toml::from_str::<toml::Value>(&raw) else {
         return;
-    }
+    };
+    let Some(control) = doc
+        .get_mut("runtime")
+        .and_then(toml::Value::as_table_mut)
+        .and_then(|runtime| runtime.get_mut("control"))
+        .and_then(toml::Value::as_table_mut)
+    else {
+        return;
+    };
 
     let mut changed = false;
-    let mut normalized = String::with_capacity(raw.len());
-    for line in raw.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("endpoint = \"unix://") {
-            normalized.push_str("endpoint = \"tcp://127.0.0.1:18082\"\n");
+    if let Some(endpoint) = control.get("endpoint").and_then(toml::Value::as_str) {
+        if endpoint.starts_with("unix://") {
+            control.insert(
+                "endpoint".to_string(),
+                toml::Value::String("tcp://127.0.0.1:18082".to_string()),
+            );
             changed = true;
-        } else {
-            normalized.push_str(line);
-            normalized.push('\n');
         }
     }
 
+    let has_auth_token = control
+        .get("auth_token")
+        .and_then(toml::Value::as_str)
+        .map(|token| !token.is_empty())
+        .unwrap_or(false);
+    if !has_auth_token {
+        control.insert(
+            "auth_token".to_string(),
+            toml::Value::String("trust-ci-token".to_string()),
+        );
+        changed = true;
+    }
+
     if changed {
+        let normalized = toml::to_string(&doc).expect("serialize normalized runtime.toml");
         std::fs::write(&runtime_path, normalized).unwrap_or_else(|err| {
             panic!(
                 "rewrite runtime endpoint for {}: {err}",

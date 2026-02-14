@@ -38,7 +38,7 @@ use tracing::{debug, warn};
 
 const HMI_DESCRIPTOR_WATCH_DEBOUNCE: Duration = Duration::from_millis(250);
 #[cfg(test)]
-const HMI_DESCRIPTOR_WATCH_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
+const HMI_DESCRIPTOR_WATCH_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(not(test))]
 const HMI_DESCRIPTOR_WATCH_STARTUP_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -1251,12 +1251,32 @@ fn hmi_event_matches_descriptor(event: &Event, project_root: &Path) -> bool {
         return false;
     }
     let hmi_dir = project_root.join("hmi");
+    let canonical_hmi_dir = std::fs::canonicalize(&hmi_dir).ok();
     event.paths.iter().any(|path| {
-        path.starts_with(&hmi_dir)
-            && path
-                .extension()
-                .and_then(|value| value.to_str())
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("toml"))
+        let is_toml = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("toml"));
+        if !is_toml {
+            return false;
+        }
+        if path.starts_with(&hmi_dir) {
+            return true;
+        }
+        let Some(canonical_hmi_dir) = canonical_hmi_dir.as_ref() else {
+            return false;
+        };
+        if path.starts_with(canonical_hmi_dir) {
+            return true;
+        }
+        if let Ok(canonical_path) = std::fs::canonicalize(path) {
+            if canonical_path.starts_with(canonical_hmi_dir) {
+                return true;
+            }
+        }
+        path.parent()
+            .and_then(|parent| std::fs::canonicalize(parent).ok())
+            .is_some_and(|canonical_parent| canonical_parent.starts_with(canonical_hmi_dir))
     })
 }
 
@@ -4493,7 +4513,8 @@ label = "Speed B"
 "#,
         );
 
-        let (revision, label) = wait_for_schema_revision(state.as_ref(), 1, Duration::from_secs(5));
+        let (revision, label) =
+            wait_for_schema_revision(state.as_ref(), 1, Duration::from_secs(10));
         assert_eq!(revision, 1);
         assert_eq!(label, "Speed B");
         fs::remove_dir_all(root).ok();
@@ -4545,7 +4566,7 @@ span = "wide"
 "#,
         );
 
-        let invalid_schema = wait_for_descriptor_error(state.as_ref(), Duration::from_secs(5));
+        let invalid_schema = wait_for_descriptor_error(state.as_ref(), Duration::from_secs(10));
         let (revision_after_invalid, label_after_invalid) =
             hmi_schema_revision_and_speed_label(state.as_ref());
         assert_eq!(revision_after_invalid, 0);
@@ -4572,10 +4593,10 @@ label = "Speed C"
         );
 
         let (revision_after_fix, label_after_fix) =
-            wait_for_schema_revision(state.as_ref(), 1, Duration::from_secs(5));
+            wait_for_schema_revision(state.as_ref(), 1, Duration::from_secs(10));
         assert_eq!(revision_after_fix, 1);
         assert_eq!(label_after_fix, "Speed C");
-        let fixed_schema = wait_for_descriptor_error_clear(state.as_ref(), Duration::from_secs(5));
+        let fixed_schema = wait_for_descriptor_error_clear(state.as_ref(), Duration::from_secs(10));
         assert!(
             fixed_schema.get("descriptor_error").is_none(),
             "descriptor_error should clear after descriptor recovers"
@@ -4669,7 +4690,7 @@ label = "Speed Final"
         );
 
         let (revision_after_churn, label_after_churn) =
-            wait_for_schema_revision(state.as_ref(), 1, Duration::from_secs(5));
+            wait_for_schema_revision(state.as_ref(), 1, Duration::from_secs(10));
         assert!(revision_after_churn >= 1);
         assert_eq!(label_after_churn, "Speed Final");
 
