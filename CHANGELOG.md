@@ -6,10 +6,13 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 
 ## [Unreleased]
 
-Target release: `v0.7.15`
+Target release: `v0.7.16`
 
 ### Added
 
+- EtherCAT bring-up examples:
+  - Added `examples/ethercat_ek1100_elx008_v2/` for EK1100 + EL2008-only hardware chains with a validated 8-output snake pattern.
+  - Added helper run scripts and docs for real-NIC bring-up and deterministic mock-mode fallback.
 - Direct Siemens TIA source handoff via export adapters:
   - `trust-runtime plcopen export --target siemens` now emits a Siemens SCL sidecar bundle (`<output>.scl/*.scl`) alongside PLCopen XML.
   - Siemens-target export reports now include `siemens_scl_bundle_dir` and `siemens_scl_files[]` for automation and CI evidence.

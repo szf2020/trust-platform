@@ -35,7 +35,8 @@ code /path/to/trust-platform
 | Runtime I/O mental model | `examples/memory_marker_counter/README.md` | `%M/%Q` cycle semantics + debugger confirmation | 20-30 min |
 | Multi-file architecture | `examples/plant_demo/README.md` | type/FB/program/config layering + cross-file refactors | 25-40 min |
 | Process-control capstone | `examples/filling_line/README.md` | hysteresis control, interface hierarchy, hot reload | 35-55 min |
-| EtherCAT bring-up | `examples/ethercat_ek1100_elx008_v1/README.md` | `io.toml`, mock-first validation, hardware handoff | 30-50 min |
+| EtherCAT bring-up (DI+DO) | `examples/ethercat_ek1100_elx008_v1/README.md` | `io.toml`, mock-first validation, hardware handoff | 30-50 min |
+| EtherCAT bring-up (DO snake) | `examples/ethercat_ek1100_elx008_v2/README.md` | EK1100+EL2008 output sweep, hardware run script, safety mapping | 20-35 min |
 | PLCopen XML interop | `examples/plcopen_xml_st_complete/README.md` | VS Code import, post-import exploration, round-trip checks, OpenPLC detection note | 30-50 min |
 | Siemens profile | `examples/siemens_scl_v1/README.md` | `#`-prefix behavior, profile comparison, runtime/debug run | 20-30 min |
 | Mitsubishi profile | `examples/mitsubishi_gxworks3_v1/README.md` | `DIFU/DIFD` mapping, profile comparison, runtime/debug run | 20-30 min |
@@ -50,7 +51,7 @@ code /path/to/trust-platform
 5. Choose specialization:
    - Interop: `examples/plcopen_xml_st_complete/README.md`
    - Vendor profiles: `examples/siemens_scl_v1/README.md`, `examples/mitsubishi_gxworks3_v1/README.md`
-   - Fieldbus backend: `examples/ethercat_ek1100_elx008_v1/README.md`
+   - Fieldbus backend: `examples/ethercat_ek1100_elx008_v1/README.md`, `examples/ethercat_ek1100_elx008_v2/README.md`
 
 ## Validation Commands
 
@@ -58,6 +59,7 @@ code /path/to/trust-platform
 trust-runtime build --project examples/filling_line --sources src
 trust-runtime build --project examples/plant_demo --sources src
 trust-runtime build --project examples/ethercat_ek1100_elx008_v1 --sources src
+trust-runtime build --project examples/ethercat_ek1100_elx008_v2 --sources src
 trust-runtime build --project examples/siemens_scl_v1 --sources src
 trust-runtime build --project examples/mitsubishi_gxworks3_v1 --sources src
 trust-runtime build --project examples/vendor_library_stubs --sources .

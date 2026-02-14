@@ -96,6 +96,12 @@ Este script:
 - Aplica permisos necesarios
 - Compila y ejecuta el proyecto
 
+Opcional: forzar adaptador sin editar archivos:
+
+```bash
+ETHERCAT_ADAPTER=enp111s0 ./run-ethercat.sh
+```
+
 ### Método 2: Script Rápido (Desarrollo)
 
 Si ya configuraste permisos previamente:
