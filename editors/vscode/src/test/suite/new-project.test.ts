@@ -141,8 +141,14 @@ suite("New project command (VS Code)", function () {
     assert.strictEqual(created, true, "Expected project command to succeed.");
 
     const mainUri = vscode.Uri.joinPath(targetUri, "src", "Main.st");
+    const legacyMainUri = vscode.Uri.joinPath(targetUri, "sources", "Main.st");
     const tomlUri = vscode.Uri.joinPath(targetUri, "trust-lsp.toml");
     assert.strictEqual(await pathExists(mainUri), true, "Expected Main.st file.");
+    assert.strictEqual(
+      await pathExists(legacyMainUri),
+      false,
+      "Expected no legacy sources/ scaffold."
+    );
     assert.strictEqual(
       await pathExists(tomlUri),
       true,

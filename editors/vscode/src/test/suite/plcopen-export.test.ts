@@ -23,7 +23,7 @@ async function readText(uri: vscode.Uri): Promise<string> {
 }
 
 async function writeSampleProject(projectUri: vscode.Uri): Promise<void> {
-  const sourcesUri = vscode.Uri.joinPath(projectUri, "sources");
+  const sourcesUri = vscode.Uri.joinPath(projectUri, "src");
   await vscode.workspace.fs.createDirectory(sourcesUri);
   await vscode.workspace.fs.writeFile(
     vscode.Uri.joinPath(sourcesUri, "Main.st"),

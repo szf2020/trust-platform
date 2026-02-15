@@ -52,7 +52,7 @@ suite("ST test workflow integration (VS Code)", function () {
     await vscode.workspace.fs.createDirectory(fixturesRoot);
     projectRoot = vscode.Uri.joinPath(fixturesRoot, "project");
     await vscode.workspace.fs.createDirectory(projectRoot);
-    await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(projectRoot, "sources"));
+    await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(projectRoot, "src"));
 
     const runtimeBin = process.env.ST_RUNTIME_TEST_BIN;
     if (runtimeBin && runtimeBin.trim().length > 0) {
@@ -80,7 +80,7 @@ suite("ST test workflow integration (VS Code)", function () {
       "",
     ].join("\n");
 
-    testUri = vscode.Uri.joinPath(projectRoot, "sources", "tests.st");
+    testUri = vscode.Uri.joinPath(projectRoot, "src", "tests.st");
     await vscode.workspace.fs.writeFile(testUri, Buffer.from(source, "utf8"));
 
     const doc = await vscode.workspace.openTextDocument(testUri);

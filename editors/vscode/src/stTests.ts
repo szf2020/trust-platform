@@ -206,8 +206,11 @@ async function readText(uri: vscode.Uri): Promise<string | undefined> {
   }
 }
 
-function hasSourcesFolder(root: string): boolean {
-  return fs.existsSync(path.join(root, "sources"));
+function hasProjectSourceFolder(root: string): boolean {
+  return (
+    fs.existsSync(path.join(root, "src")) ||
+    fs.existsSync(path.join(root, "sources"))
+  );
 }
 
 function nearestProjectRoot(fsPath: string): string | undefined {
@@ -215,7 +218,7 @@ function nearestProjectRoot(fsPath: string): string | undefined {
     ? fsPath
     : path.dirname(fsPath);
   while (true) {
-    if (hasSourcesFolder(current)) {
+    if (hasProjectSourceFolder(current)) {
       return current;
     }
     const parent = path.dirname(current);
@@ -240,7 +243,7 @@ function resolveProjectRootFromUri(uri?: vscode.Uri): string | undefined {
 
 function resolveProjectRoot(args?: RunAllArgs | RunOneArgs): string | undefined {
   const directUri = toUri((args as RunAllArgs | undefined)?.projectUri);
-  if (directUri && hasSourcesFolder(directUri.fsPath)) {
+  if (directUri && hasProjectSourceFolder(directUri.fsPath)) {
     return directUri.fsPath;
   }
 
@@ -250,7 +253,7 @@ function resolveProjectRoot(args?: RunAllArgs | RunOneArgs): string | undefined 
     if (nearest) {
       return nearest;
     }
-    if (hasSourcesFolder(uriArg.fsPath)) {
+    if (hasProjectSourceFolder(uriArg.fsPath)) {
       return uriArg.fsPath;
     }
     const fromUri = resolveProjectRootFromUri(uriArg);

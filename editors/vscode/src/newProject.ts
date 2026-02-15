@@ -99,16 +99,10 @@ async function confirmOverwrite(targetUri: vscode.Uri): Promise<boolean> {
 
 async function writeScaffold(targetUri: vscode.Uri): Promise<void> {
   const srcUri = vscode.Uri.joinPath(targetUri, "src");
-  const sourcesUri = vscode.Uri.joinPath(targetUri, "sources");
   await vscode.workspace.fs.createDirectory(srcUri);
-  await vscode.workspace.fs.createDirectory(sourcesUri);
   const mainBuffer = Buffer.from(MAIN_ST_SOURCE);
   await vscode.workspace.fs.writeFile(
     vscode.Uri.joinPath(srcUri, "Main.st"),
-    mainBuffer
-  );
-  await vscode.workspace.fs.writeFile(
-    vscode.Uri.joinPath(sourcesUri, "Main.st"),
     mainBuffer
   );
   await vscode.workspace.fs.writeFile(
