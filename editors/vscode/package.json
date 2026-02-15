@@ -96,7 +96,9 @@
     "onLanguageModelTool:trust_debug_open_io_panel",
     "onLanguageModelTool:trust_debug_ensure_configuration",
     "onCommand:trust-lsp.test.runAll",
-    "onCommand:trust-lsp.test.runOne"
+    "onCommand:trust-lsp.test.runOne",
+    "onCommand:trust-lsp.statechart.new",
+    "onCommand:trust-lsp.statechart.import"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -2156,6 +2158,16 @@
       {
         "command": "trust-lsp.test.runOne",
         "title": "Structured Text: Run Test",
+        "category": "Structured Text"
+      },
+      {
+        "command": "trust-lsp.statechart.new",
+        "title": "Structured Text: New UML Statechart",
+        "category": "Structured Text"
+      },
+      {
+        "command": "trust-lsp.statechart.import",
+        "title": "Structured Text: Import UML Statechart",
         "category": "Structured Text"
       }
     ],

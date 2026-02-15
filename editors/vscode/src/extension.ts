@@ -13,6 +13,8 @@ import { registerLanguageModelTools } from "./lm-tools";
 import { augmentDiagnostic } from "./diagnostics";
 import { defaultRuntimeControlEndpoint } from "./runtimeDefaults";
 import { registerNewProjectCommand } from "./newProject";
+import { registerNewStatechartCommand } from "./statechart/newStatechart";
+import { registerImportStatechartCommand } from "./statechart/importStatechart";
 import { registerPlcopenImportCommand } from "./plcopenImport";
 import { registerPlcopenExportCommand } from "./plcopenExport";
 import { registerStTestIntegration } from "./stTests";
@@ -221,6 +223,8 @@ export async function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(client);
   registerNewProjectCommand(context);
+  registerNewStatechartCommand(context);
+  registerImportStatechartCommand(context);
   registerPlcopenImportCommand(context);
   registerPlcopenExportCommand(context);
   registerNamespaceMoveCommand(context, client);

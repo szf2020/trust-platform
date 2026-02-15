@@ -27,6 +27,7 @@ const buildOptions = {
     ".ts": "ts",
     ".jsx": "jsx",
     ".js": "js",
+    ".css": "css",
   },
   define: {
     "process.env.NODE_ENV": isWatch ? '"development"' : '"production"',
