@@ -1,0 +1,68 @@
+{
+  "id": "stateMachine",
+  "initial": "State5",
+  "states": {
+    "Red": {
+      "entry": [
+        "logRedEntry",
+        "turnOnRedLight"
+      ],
+      "exit": [
+        "turnOffRedLight"
+      ],
+      "on": {
+        "TIMER": {
+          "target": "Green",
+          "actions": [
+            "logTransition"
+          ]
+        }
+      }
+    },
+    "Green": {
+      "entry": [
+        "logGreenEntry",
+        "turnOnGreenLight"
+      ],
+      "exit": [
+        "turnOffGreenLight"
+      ],
+      "on": {
+        "TIMER": {
+          "target": "Yellow",
+          "actions": [
+            "logTransition"
+          ]
+        },
+        "NEXT": {
+          "target": "State4"
+        }
+      }
+    },
+    "Yellow": {
+      "entry": [
+        "logYellowEntry",
+        "turnOnYellowLight"
+      ],
+      "exit": [
+        "turnOffYellowLight"
+      ],
+      "on": {
+        "TIMER": {
+          "target": "Red",
+          "actions": [
+            "logTransition"
+          ]
+        }
+      }
+    },
+    "State4": {
+      "on": {
+        "NEXT": {
+          "target": "Yellow"
+        }
+      }
+    },
+    "State5": {}
+  }
+}

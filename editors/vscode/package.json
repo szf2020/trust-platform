@@ -2075,6 +2075,18 @@
         }
       }
     ],
+    "customEditors": [
+      {
+        "viewType": "trust-lsp.statechartEditor",
+        "displayName": "StateChart Editor",
+        "selector": [
+          {
+            "filenamePattern": "*.statechart.json"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
     "commands": [
       {
         "command": "trust-lsp.newProject",
@@ -2290,24 +2302,34 @@
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "build:panel": "node ./scripts/build-io-panel.js",
-    "compile": "npm run build:panel && tsc -p ./",
-    "watch": "node ./scripts/watch-io-panel.js",
+    "build:statechart": "node ./scripts/build-statechart-webview.js",
+    "compile": "npm run build:panel && npm run build:statechart && tsc -p ./",
+    "watch": "concurrently \"node ./scripts/watch-io-panel.js\" \"node ./scripts/build-statechart-webview.js --watch\"",
     "lint": "eslint src --ext ts",
     "test": "npm run compile && node ./out/test/runTest.js"
   },
   "dependencies": {
     "@vscode/codicons": "^0.0.44",
+    "@xyflow/react": "^12.10.0",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.564.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.0",
-    "@types/vscode": "^1.108.1",
     "@types/node": "^18.0.0",
-    "typescript": "^5.0.0",
-    "@typescript-eslint/parser": "^6.0.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@types/vscode": "^1.108.1",
     "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
     "@vscode/test-electron": "^2.4.1",
+    "concurrently": "^9.2.1",
+    "esbuild": "^0.27.3",
     "eslint": "^8.0.0",
-    "mocha": "^10.0.0"
+    "mocha": "^10.0.0",
+    "typescript": "^5.0.0"
   }
 }
