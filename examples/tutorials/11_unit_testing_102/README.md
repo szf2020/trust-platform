@@ -2,15 +2,17 @@
 
 This tutorial shows the production pattern you should use in truST:
 
-1. keep physical I/O mapping (`%I`, `%Q`, `%M`) inside a `PROGRAM`,
+1. keep physical I/O mapping (`%I`, `%Q`, `%M`) in `CONFIGURATION` via `VAR_CONFIG`,
 2. keep control logic inside a `FUNCTION_BLOCK` with plain inputs/outputs,
-3. unit test the function block with simulated values (mock I/O).
+3. keep the `PROGRAM` as wiring between mapped variables and control FB logic,
+4. unit test the function block with simulated values (mock I/O).
 
 This gives fast tests, deterministic behavior, and easier debugging.
 
 ## What you will build
 
-- A production `PROGRAM` (`TankProgram`) that maps real I/O addresses.
+- A production `PROGRAM` (`TankProgram`) with plain variables and wiring logic.
+- A `CONFIGURATION` (`TankControlConfig`) that binds `%I/%Q` addresses with `VAR_CONFIG`.
 - A logic block (`FB_TANK_CONTROL`) that can be tested without hardware.
 - Tests that simulate low/high/stop conditions and verify outputs.
 
@@ -25,8 +27,8 @@ This gives fast tests, deterministic behavior, and easier debugging.
 Open `src/main.st`:
 
 - `FB_TANK_CONTROL` contains decision logic.
-- `PROGRAM TankProgram` maps field I/O to `%IX/%IW/%QX/%QW`.
-- Program calls FB and copies FB outputs to mapped outputs.
+- `PROGRAM TankProgram` wires process variables into the FB and copies outputs back.
+- `CONFIGURATION TankControlConfig` performs `%IX/%IW/%QX/%QW` mapping via `VAR_CONFIG`.
 
 This separation is the key to mockable tests.
 
