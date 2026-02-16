@@ -29,14 +29,20 @@ results when WASM requests fail or time out.
 
 ### Manual smoke checks (strict WASM/LSP path)
 
-1. Open `program.st`, place the cursor on a new line inside the program body, type `Sta`,
-   and trigger completion (`Ctrl+Space`):
-   expected suggestions include `Status`.
-2. In the same location type `Pu` and trigger completion:
-   expected suggestions include `Pump`.
-3. Open `fb_pump.st` and hover `FB_Pump`:
-   expected signature text includes `Command : ST_PumpCommand;` and
-   `Status : ST_PumpStatus;` (no `?` placeholders).
+1. Diagnostics:
+   introduce a temporary typo in `program.st`; expected squiggle appears, and status bar diagnostic count increases.
+2. Hover:
+   open `fb_pump.st` and hover `FB_Pump`; expected signature includes `Command : ST_PumpCommand;` and `Status : ST_PumpStatus;` (no `?` placeholders).
+3. Completion:
+   in `fb_pump.st`, type after `Status.` and press `Ctrl+Space`; expected members include `State`, `Running`, and `ActualSpeed`.
+4. Go to definition:
+   in `fb_pump.st`, `Ctrl+Left-click` `E_PumpState`; expected jump to `types.st` enum declaration.
+5. Go to references:
+   in `types.st`, right-click `Enable` and choose `Go to References` (or press `Shift+F12`); expected references include `fb_pump.st` and `program.st`.
+6. Document highlights:
+   click `ramp` in `fb_pump.st`; expected all occurrences in that file are highlighted.
+7. Rename:
+   in `types.st`, put cursor on `ActualSpeed`, press `F2` (or `Fn+F2`), rename to `ActualSpeedRpm`; expected edits across files.
 
 ## GitHub Pages deployment
 

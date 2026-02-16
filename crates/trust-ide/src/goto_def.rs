@@ -9,7 +9,7 @@ use trust_hir::{Database, SourceDatabase, SymbolId};
 use trust_syntax::parser::parse;
 
 use crate::util::{
-    field_declaration_ranges, field_type, resolve_target_at_position, ResolvedTarget,
+    field_declaration_ranges, field_type, resolve_target_at_position, FieldTarget, ResolvedTarget,
 };
 
 /// Result of a go-to-definition request.
@@ -30,16 +30,7 @@ pub fn goto_definition(
     let target = resolve_target_at_position(db, file_id, position)?;
     match target {
         ResolvedTarget::Symbol(symbol_id) => definition_of_symbol(db, file_id, symbol_id),
-        ResolvedTarget::Field(field) => {
-            let source = db.source_text(file_id);
-            let parsed = parse(&source);
-            let root = parsed.syntax();
-            let symbols = db.file_symbols_with_project(file_id);
-            let range = field_declaration_ranges(&root, &symbols, &field)
-                .into_iter()
-                .next()?;
-            Some(DefinitionResult { file_id, range })
-        }
+        ResolvedTarget::Field(field) => definition_of_field(db, &field),
     }
 }
 
@@ -121,6 +112,25 @@ fn type_definition_for_type_id(
         .iter()
         .find(|sym| sym.type_id == type_id && is_type_symbol(sym))?;
     definition_of_symbol(db, file_id, symbol.id)
+}
+
+fn definition_of_field(db: &Database, field: &FieldTarget) -> Option<DefinitionResult> {
+    for candidate_file_id in db.file_ids() {
+        let source = db.source_text(candidate_file_id);
+        let parsed = parse(&source);
+        let root = parsed.syntax();
+        let symbols = db.file_symbols_with_project(candidate_file_id);
+        if let Some(range) = field_declaration_ranges(&root, &symbols, field)
+            .into_iter()
+            .next()
+        {
+            return Some(DefinitionResult {
+                file_id: candidate_file_id,
+                range,
+            });
+        }
+    }
+    None
 }
 
 fn is_type_symbol(symbol: &trust_hir::symbols::Symbol) -> bool {

@@ -6,7 +6,7 @@ use text_size::{TextRange, TextSize};
 
 use smol_str::SmolStr;
 use trust_hir::db::{FileId, SemanticDatabase};
-use trust_hir::{Database, SourceDatabase, SymbolId, TypeId};
+use trust_hir::{Database, SourceDatabase, SymbolId, Type, TypeId};
 use trust_syntax::parser::parse;
 use trust_syntax::syntax::{SyntaxKind, SyntaxNode};
 
@@ -77,15 +77,7 @@ pub fn find_references(
                     )
                 }
             }
-            ResolvedTarget::Field(field) => find_references_to_field_in_context(
-                db,
-                file_id,
-                &field,
-                options,
-                &context.source,
-                &context.root,
-                &context.symbols,
-            ),
+            ResolvedTarget::Field(field) => find_references_to_field(db, file_id, &field, options),
         };
     }
 
@@ -380,12 +372,27 @@ pub(crate) fn find_references_to_field(
     target: &FieldTarget,
     options: FindReferencesOptions,
 ) -> Vec<Reference> {
-    let source = db.source_text(file_id);
-    let parsed = parse(&source);
-    let root = parsed.syntax();
-    let symbols = db.file_symbols(file_id);
+    let _ = file_id;
+    let mut references = Vec::new();
 
-    find_references_to_field_in_context(db, file_id, target, options, &source, &root, &symbols)
+    for other_file_id in db.file_ids() {
+        let source = db.source_text(other_file_id);
+        let parsed = parse(&source);
+        let root = parsed.syntax();
+        let symbols = db.file_symbols_with_project(other_file_id);
+
+        references.extend(find_references_to_field_in_context(
+            db,
+            other_file_id,
+            target,
+            options,
+            &source,
+            &root,
+            &symbols,
+        ));
+    }
+
+    references
 }
 
 fn find_references_to_field_in_context(
@@ -422,7 +429,8 @@ fn find_references_to_field_in_context(
         let Some(base_type) = field_expr_base_type(db, file_id, symbols, root, &node) else {
             continue;
         };
-        if symbols.resolve_alias_type(base_type) != target.type_id {
+        let type_matches = field_access_type_matches_target(symbols, base_type, target);
+        if !type_matches {
             continue;
         }
         references.push(Reference {
@@ -489,7 +497,10 @@ fn resolve_field_expr_member(
     node: &SyntaxNode,
 ) -> Option<(SymbolId, TextRange)> {
     let name_token = field_name_from_field_expr(node)?;
-    let base_type = field_expr_base_type(db, file_id, symbols, root, node)?;
+    let base_type = normalized_field_access_type(
+        symbols,
+        field_expr_base_type(db, file_id, symbols, root, node)?,
+    );
     let member_id = symbols.resolve_member_symbol_in_type(base_type, name_token.text())?;
     Some((member_id, name_token.text_range()))
 }
@@ -510,8 +521,45 @@ fn field_expr_base_type(
         let scope_id = scope_at_position(symbols, root, base_expr.text_range().start());
         if let Some(symbol_id) = symbols.resolve(ident.text(), scope_id) {
             if let Some(symbol) = symbols.get(symbol_id) {
-                return Some(symbols.resolve_alias_type(symbol.type_id));
+                let same_file = symbol
+                    .origin
+                    .map(|origin| origin.file_id == file_id)
+                    .unwrap_or(true);
+                if same_file
+                    && matches!(
+                        symbol.kind,
+                        trust_hir::symbols::SymbolKind::Variable { .. }
+                            | trust_hir::symbols::SymbolKind::Constant
+                            | trust_hir::symbols::SymbolKind::Parameter { .. }
+                    )
+                {
+                    return Some(symbols.resolve_alias_type(symbol.type_id));
+                }
             }
+        }
+
+        // Some declarations (notably FB VAR_INPUT/VAR_OUTPUT members) can be missed
+        // by scope-only lookup in recovery-heavy AST states. Fall back to the nearest
+        // same-file variable/constant symbol with the same name.
+        if let Some(symbol) = symbols
+            .iter()
+            .filter(|symbol| {
+                matches!(
+                    symbol.kind,
+                    trust_hir::symbols::SymbolKind::Variable { .. }
+                        | trust_hir::symbols::SymbolKind::Constant
+                        | trust_hir::symbols::SymbolKind::Parameter { .. }
+                )
+            })
+            .filter(|symbol| symbol.name.eq_ignore_ascii_case(ident.text()))
+            .filter(|symbol| match symbol.origin {
+                Some(origin) => origin.file_id == file_id,
+                None => true,
+            })
+            .filter(|symbol| symbol.range.start() <= base_expr.text_range().start())
+            .max_by_key(|symbol| u32::from(symbol.range.start()))
+        {
+            return Some(symbols.resolve_alias_type(symbol.type_id));
         }
     }
 
@@ -524,6 +572,70 @@ fn field_expr_base_type(
 fn field_name_from_field_expr(node: &SyntaxNode) -> Option<trust_syntax::syntax::SyntaxToken> {
     let name_node = node.children().find(|n| n.kind() == SyntaxKind::Name)?;
     ident_token_in_name(&name_node)
+}
+
+fn field_access_type_matches_target(
+    symbols: &trust_hir::symbols::SymbolTable,
+    base_type: TypeId,
+    target: &FieldTarget,
+) -> bool {
+    let base_type = normalized_field_access_type(symbols, base_type);
+    let target_type = normalized_field_access_type(symbols, target.type_id);
+    if base_type == target_type {
+        return true;
+    }
+
+    let base_name = named_type_identity(symbols, base_type);
+    let target_name = target
+        .type_name
+        .clone()
+        .or_else(|| named_type_identity(symbols, target_type));
+    match (base_name, target_name) {
+        (Some(base_name), Some(target_name)) => base_name.eq_ignore_ascii_case(&target_name),
+        _ => false,
+    }
+}
+
+fn normalized_field_access_type(
+    symbols: &trust_hir::symbols::SymbolTable,
+    type_id: TypeId,
+) -> TypeId {
+    let mut current = symbols.resolve_alias_type(type_id);
+    loop {
+        let Some(next) = (match symbols.type_by_id(current) {
+            Some(Type::Reference { target } | Type::Pointer { target }) => {
+                Some(symbols.resolve_alias_type(*target))
+            }
+            _ => None,
+        }) else {
+            break;
+        };
+        if next == current {
+            break;
+        }
+        current = next;
+    }
+    current
+}
+
+fn named_type_identity(
+    symbols: &trust_hir::symbols::SymbolTable,
+    type_id: TypeId,
+) -> Option<SmolStr> {
+    if let Some(name) = symbols.type_name(type_id) {
+        return Some(name);
+    }
+
+    match symbols.type_by_id(type_id)? {
+        Type::Struct { name, .. }
+        | Type::Union { name, .. }
+        | Type::Enum { name, .. }
+        | Type::FunctionBlock { name }
+        | Type::Class { name }
+        | Type::Interface { name }
+        | Type::Alias { name, .. } => Some(name.clone()),
+        _ => None,
+    }
 }
 
 fn resolve_field_expr_qualified_symbol(

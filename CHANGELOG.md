@@ -6,7 +6,7 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 
 ## [Unreleased]
 
-Target release: `v0.9.9`
+Target release: `v0.9.10`
 
 ### Added
 
@@ -279,6 +279,8 @@ Target release: `v0.9.9`
 - Browser analysis worker-recovery CI gate now includes the Node test fixture file (`docs/internal/prototypes/browser_analysis_wasm_spike/web/analysis-client.test.mjs`) in tracked repository contents, fixing missing-file failures on GitHub runners.
 - GitHub Pages demo language features are now strict WASM/LSP-only (no local fallback synthesis), completion request flow is hardened via deduplicated document sync and longer WASM request budgets for slower devices, and FB hover signatures now recover declared member type text from source when semantic type IDs are unresolved.
 - Browser WASM completion ranking now prioritizes typed-prefix matches before result limiting, and completion context recovery now keeps in-scope program variables available during parser recovery edits (fixing missing `Status`/`Pump` suggestions in the demo).
+- Browser IDE/WASM LSP navigation for structured type fields is now project-wide: `Go to Definition`, `Go to References`, and rename now resolve `STRUCT`/`UNION` members across files (fixing `No definition/references found` on demo symbols like `Enable`, `ActualSpeed`, and `ramp`).
+- GitHub Pages demo rename wiring now consumes WASM rename edits directly, restoring `F2` rename in Monaco, and walkthrough instructions now match the exact Monaco UI labels/actions (`Ctrl+Left-click`, `Go to References`, `Fn+F2` note for laptops).
 - VS Code extension project workflows now follow `src/`-based projects consistently: ST test run root detection accepts `src`, PLCopen export integration coverage uses `src`, and new-project scaffolding no longer generates legacy `sources/`.
 - CI Windows build no longer fails on missing `wpcap.lib` when `ethercat-wire` is enabled by default; EtherCAT wire dependency wiring is now unix-target gated while preserving mock-driver support cross-platform.
 - MP-001 parity baseline updated for newly added Mitsubishi LSP regression tests so discovery parity gate remains deterministic.

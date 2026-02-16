@@ -156,11 +156,11 @@ const WALKTHROUGH = [
   },
   {
     title: "Go to Definition",
-    hint: "<kbd>Ctrl+Click</kbd> on <kbd>E_PumpState</kbd> in fb_pump.st to jump to its definition in types.st.",
+    hint: "<kbd>Ctrl+Left-click</kbd> on <kbd>E_PumpState</kbd> in fb_pump.st to jump to its definition in types.st.",
   },
   {
     title: "Find References",
-    hint: "Right-click on <kbd>Enable</kbd> and select <em>Find All References</em> to see every usage across files.",
+    hint: "Right-click on <kbd>Enable</kbd> and select <em>Go to References</em> (or press <kbd>Shift+F12</kbd>) to see every usage across files.",
   },
   {
     title: "Document Highlights",
@@ -168,7 +168,7 @@ const WALKTHROUGH = [
   },
   {
     title: "Rename",
-    hint: "Press <kbd>F2</kbd> on <kbd>ActualSpeed</kbd> to rename it across all files in the project.",
+    hint: "Press <kbd>F2</kbd> (or <kbd>Fn+F2</kbd> on laptops) on <kbd>ActualSpeed</kbd> to rename it across all files in the project.",
   },
 ];
 
@@ -588,12 +588,12 @@ function registerProviders() {
       try {
         await syncAllDocuments();
         const result = await wasmClient.rename(file.uri, fromMonacoPosition(position), newName);
-        if (!result || !result.changes) return null;
         const edits = [];
-        for (const [uri, changes] of Object.entries(result.changes)) {
-          const targetModel = findModelByUri(uri);
-          if (!targetModel) continue;
-          for (const change of changes) {
+        if (Array.isArray(result)) {
+          for (const change of result) {
+            if (!change || !change.uri || !change.range) continue;
+            const targetModel = findModelByUri(change.uri);
+            if (!targetModel) continue;
             edits.push({
               resource: targetModel.uri,
               textEdit: {
@@ -603,7 +603,23 @@ function registerProviders() {
               versionId: undefined,
             });
           }
+        } else if (result && result.changes && typeof result.changes === "object") {
+          for (const [uri, changes] of Object.entries(result.changes)) {
+            const targetModel = findModelByUri(uri);
+            if (!targetModel) continue;
+            for (const change of changes) {
+              edits.push({
+                resource: targetModel.uri,
+                textEdit: {
+                  range: toMonacoRange(change.range, targetModel),
+                  text: change.new_text || change.newText || newName,
+                },
+                versionId: undefined,
+              });
+            }
+          }
         }
+        if (edits.length === 0) return null;
         return { edits };
       } catch {
         return null;

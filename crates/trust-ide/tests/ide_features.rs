@@ -445,6 +445,84 @@ END_PROGRAM
 }
 
 #[test]
+fn test_struct_field_definition_and_references_across_files() {
+    let types_source = r#"
+TYPE
+    ST_Cmd : STRUCT
+        Enable : BOOL;
+    END_STRUCT;
+END_TYPE
+"#;
+    let fb_source = r#"
+FUNCTION_BLOCK FB_Test
+VAR_INPUT
+    Command : ST_Cmd;
+END_VAR
+VAR
+    LocalEnable : BOOL;
+END_VAR
+
+LocalEnable := Command.Enable;
+END_FUNCTION_BLOCK
+"#;
+    let program_source = r#"
+PROGRAM Main
+VAR
+    Cmd : ST_Cmd;
+END_VAR
+
+Cmd.Enable := TRUE;
+END_PROGRAM
+"#;
+
+    let mut db = Database::new();
+    let types_file = FileId(0);
+    let fb_file = FileId(1);
+    let program_file = FileId(2);
+    db.set_source_text(types_file, types_source.to_string());
+    db.set_source_text(fb_file, fb_source.to_string());
+    db.set_source_text(program_file, program_source.to_string());
+
+    let pos = TextSize::from(types_source.find("Enable : BOOL").unwrap() as u32);
+    let def = goto_definition(&db, types_file, pos).expect("definition should resolve");
+    assert_eq!(
+        def.file_id, types_file,
+        "struct field definition should resolve to the type declaration file"
+    );
+
+    let refs = find_references(
+        &db,
+        types_file,
+        pos,
+        FindReferencesOptions {
+            include_declaration: true,
+        },
+    );
+    assert!(
+        refs.iter().any(|reference| reference.file_id == types_file),
+        "references should include struct field declaration, got file ids: {:?}",
+        refs.iter()
+            .map(|reference| reference.file_id)
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        refs.iter().any(|reference| reference.file_id == fb_file),
+        "references should include field usage in function block file, got file ids: {:?}",
+        refs.iter()
+            .map(|reference| reference.file_id)
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        refs.iter()
+            .any(|reference| reference.file_id == program_file),
+        "references should include field usage in program file, got file ids: {:?}",
+        refs.iter()
+            .map(|reference| reference.file_id)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_rename_function_block_updates_type_usage_in_other_file() {
     let fb_source = r#"
 FUNCTION_BLOCK LevelControllerFb

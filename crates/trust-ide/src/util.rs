@@ -124,13 +124,8 @@ pub fn scope_at_position(symbols: &SymbolTable, root: &SyntaxNode, offset: TextS
 pub fn ident_at_offset(source: &str, offset: TextSize) -> Option<(&str, TextRange)> {
     let offset = u32::from(offset) as usize;
     for token in lex(source) {
-        if token.kind != TokenKind::Ident {
-            continue;
-        }
-        let start = usize::from(token.range.start());
-        let end = usize::from(token.range.end());
-        if start <= offset && offset < end {
-            return Some((&source[start..end], token.range));
+        if let Some(hit) = ident_match_at(source, token.kind, token.range, offset) {
+            return Some(hit);
         }
     }
     if offset == 0 {
@@ -138,22 +133,50 @@ pub fn ident_at_offset(source: &str, offset: TextSize) -> Option<(&str, TextRang
     }
     let fallback = offset - 1;
     for token in lex(source) {
-        if token.kind != TokenKind::Ident {
-            continue;
-        }
-        let start = usize::from(token.range.start());
-        let end = usize::from(token.range.end());
-        if start <= fallback && fallback < end {
-            return Some((&source[start..end], token.range));
+        if let Some(hit) = ident_match_at(source, token.kind, token.range, fallback) {
+            return Some(hit);
         }
     }
     None
+}
+
+fn ident_match_at(
+    source: &str,
+    kind: TokenKind,
+    range: TextRange,
+    offset: usize,
+) -> Option<(&str, TextRange)> {
+    let start = usize::from(range.start());
+    let end = usize::from(range.end());
+    if start > offset || offset >= end {
+        return None;
+    }
+
+    match kind {
+        TokenKind::Ident => Some((&source[start..end], range)),
+        // `E_State#Running` is lexed as a typed-literal prefix token (`E_State#`)
+        // plus an identifier value; we treat the prefix name as a navigable symbol.
+        TokenKind::TypedLiteralPrefix if end > start + 1 => {
+            let name_end = end - 1;
+            let name_range = TextRange::new(
+                TextSize::from(start as u32),
+                TextSize::from(name_end as u32),
+            );
+            if offset < name_end {
+                Some((&source[start..name_end], name_range))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct FieldTarget {
     pub(crate) type_id: TypeId,
     pub(crate) name: SmolStr,
+    pub(crate) type_name: Option<SmolStr>,
 }
 
 #[derive(Debug, Clone)]
@@ -371,61 +394,113 @@ pub(crate) fn resolve_target_at_position_with_context(
             None => true,
         }
     }) {
+        if let Some(field_target) = field_target_for_symbol_declaration(symbols, symbol) {
+            return Some(ResolvedTarget::Field(field_target));
+        }
         return Some(ResolvedTarget::Symbol(symbol.id));
     }
 
-    let token = root.token_at_offset(position).right_biased()?;
-    let name_node = name_node_at_token(&token)?;
-
-    if name_node.kind() == SyntaxKind::Name {
-        if let Some(field_target) = resolve_field_decl_target(symbols, &name_node, name) {
-            return Some(ResolvedTarget::Field(field_target));
-        }
-
-        if let Some(target) = resolve_field_target(db, file_id, symbols, &name_node, name) {
-            return Some(target);
-        }
-
-        if let Some(field_expr) = name_node
-            .parent()
-            .filter(|parent| parent.kind() == SyntaxKind::FieldExpr)
-        {
-            if let Some(parts) = qualified_name_from_field_expr(&field_expr) {
-                if let Some(symbol_id) = symbols.resolve_qualified(&parts) {
-                    return Some(ResolvedTarget::Symbol(symbol_id));
+    if let Some(token) = root.token_at_offset(position).right_biased() {
+        if let Some(name_node) = name_node_at_token(&token) {
+            if name_node.kind() == SyntaxKind::Name {
+                if let Some(field_target) = resolve_field_decl_target(symbols, &name_node, name) {
+                    return Some(ResolvedTarget::Field(field_target));
                 }
-            }
-        }
 
-        if is_type_name_node(&name_node) {
-            if let Some(parts) = qualified_name_parts_from_node(&name_node) {
-                if let Some(symbol_id) = resolve_type_symbol(symbols, &parts, scope_id) {
-                    return Some(ResolvedTarget::Symbol(symbol_id));
+                if let Some(target) = resolve_field_target(db, file_id, symbols, &name_node, name) {
+                    return Some(target);
                 }
-            } else if let Some(symbol_id) =
-                resolve_type_symbol(symbols, &[SmolStr::new(name)], scope_id)
-            {
-                return Some(ResolvedTarget::Symbol(symbol_id));
-            }
-        }
-    } else if name_node.kind() == SyntaxKind::NameRef {
-        if let Some(target) = resolve_field_target(db, file_id, symbols, &name_node, name) {
-            return Some(target);
-        }
 
-        if let Some(field_expr) = name_node
-            .parent()
-            .filter(|parent| parent.kind() == SyntaxKind::FieldExpr)
-        {
-            if let Some(parts) = qualified_name_from_field_expr(&field_expr) {
-                if let Some(symbol_id) = symbols.resolve_qualified(&parts) {
-                    return Some(ResolvedTarget::Symbol(symbol_id));
+                if let Some(field_expr) = name_node
+                    .parent()
+                    .filter(|parent| parent.kind() == SyntaxKind::FieldExpr)
+                {
+                    if let Some(parts) = qualified_name_from_field_expr(&field_expr) {
+                        if let Some(symbol_id) = symbols.resolve_qualified(&parts) {
+                            return Some(ResolvedTarget::Symbol(symbol_id));
+                        }
+                    }
+                }
+
+                if is_type_name_node(&name_node) {
+                    if let Some(parts) = qualified_name_parts_from_node(&name_node) {
+                        if let Some(symbol_id) = resolve_type_symbol(symbols, &parts, scope_id) {
+                            return Some(ResolvedTarget::Symbol(symbol_id));
+                        }
+                    } else if let Some(symbol_id) =
+                        resolve_type_symbol(symbols, &[SmolStr::new(name)], scope_id)
+                    {
+                        return Some(ResolvedTarget::Symbol(symbol_id));
+                    }
+                }
+            } else if name_node.kind() == SyntaxKind::NameRef {
+                if let Some(field_target) = resolve_field_decl_target(symbols, &name_node, name) {
+                    return Some(ResolvedTarget::Field(field_target));
+                }
+
+                if let Some(target) = resolve_field_target(db, file_id, symbols, &name_node, name) {
+                    return Some(target);
+                }
+
+                if let Some(field_expr) = name_node
+                    .parent()
+                    .filter(|parent| parent.kind() == SyntaxKind::FieldExpr)
+                {
+                    if let Some(parts) = qualified_name_from_field_expr(&field_expr) {
+                        if let Some(symbol_id) = symbols.resolve_qualified(&parts) {
+                            return Some(ResolvedTarget::Symbol(symbol_id));
+                        }
+                    }
                 }
             }
         }
     }
 
-    symbols.resolve(name, scope_id).map(ResolvedTarget::Symbol)
+    if let Some(symbol_id) = symbols.resolve(name, scope_id) {
+        return Some(ResolvedTarget::Symbol(symbol_id));
+    }
+
+    // Some type-usage contexts (for example enum qualified literals like
+    // `E_State#Value`) do not classify as a TypeRef node; fall back to type lookup.
+    if let Some(symbol_id) = resolve_type_symbol(symbols, &[SmolStr::new(name)], scope_id) {
+        return Some(ResolvedTarget::Symbol(symbol_id));
+    }
+
+    if let Some(symbol_id) = symbols
+        .iter()
+        .find(|symbol| symbol.is_type() && symbol.name.eq_ignore_ascii_case(name))
+        .map(|symbol| symbol.id)
+    {
+        return Some(ResolvedTarget::Symbol(symbol_id));
+    }
+
+    None
+}
+
+fn field_target_for_symbol_declaration(
+    symbols: &SymbolTable,
+    symbol: &Symbol,
+) -> Option<FieldTarget> {
+    if !matches!(
+        symbol.kind,
+        SymbolKind::Variable { .. } | SymbolKind::Constant
+    ) {
+        return None;
+    }
+    let parent_id = symbol.parent?;
+    let parent = symbols.get(parent_id)?;
+    if !matches!(parent.kind, SymbolKind::Type) {
+        return None;
+    }
+    let type_id = symbols.resolve_alias_type(parent.type_id);
+    match symbols.type_by_id(type_id) {
+        Some(Type::Struct { .. } | Type::Union { .. }) => Some(FieldTarget {
+            type_id,
+            name: symbol.name.clone(),
+            type_name: Some(parent.name.clone()),
+        }),
+        _ => None,
+    }
 }
 fn name_node_at_token(token: &SyntaxToken) -> Option<SyntaxNode> {
     token
@@ -713,24 +788,40 @@ fn resolve_field_decl_target(
     if name_node.parent()?.kind() != SyntaxKind::VarDecl {
         return None;
     }
+    let type_body = name_node
+        .ancestors()
+        .skip(1)
+        .find(|n| matches!(n.kind(), SyntaxKind::StructDef | SyntaxKind::UnionDef))?;
     let type_decl = name_node
         .ancestors()
         .skip(1)
         .find(|n| n.kind() == SyntaxKind::TypeDecl)?;
-    let type_name_node = type_decl
-        .children()
-        .find(|n| n.kind() == SyntaxKind::Name)?;
-    let type_ident = ident_token_in_name(&type_name_node)?;
-    let type_id = symbols.lookup_type(type_ident.text())?;
+    let type_name = type_name_for_type_body(&type_decl, &type_body)?;
+    let type_id = symbols.lookup_type(type_name.as_str())?;
     let type_id = symbols.resolve_alias_type(type_id);
 
     match symbols.type_by_id(type_id)? {
         Type::Struct { .. } | Type::Union { .. } => Some(FieldTarget {
             type_id,
             name: SmolStr::new(field_name),
+            type_name: Some(type_name),
         }),
         _ => None,
     }
+}
+
+fn type_name_for_type_body(type_decl: &SyntaxNode, type_body: &SyntaxNode) -> Option<SmolStr> {
+    let mut current_type_name: Option<SmolStr> = None;
+    for child in type_decl.children() {
+        if child.kind() == SyntaxKind::Name {
+            current_type_name = name_from_name_node(&child);
+            continue;
+        }
+        if child == *type_body {
+            return current_type_name;
+        }
+    }
+    None
 }
 
 fn resolve_struct_field(
@@ -739,19 +830,21 @@ fn resolve_struct_field(
     field_name: &str,
 ) -> Option<FieldTarget> {
     match symbols.type_by_id(type_id)? {
-        Type::Struct { fields, .. } => fields
+        Type::Struct { name, fields } => fields
             .iter()
             .find(|field| field.name.eq_ignore_ascii_case(field_name))
             .map(|field| FieldTarget {
                 type_id,
                 name: field.name.clone(),
+                type_name: Some(name.clone()),
             }),
-        Type::Union { variants, .. } => variants
+        Type::Union { name, variants } => variants
             .iter()
             .find(|variant| variant.name.eq_ignore_ascii_case(field_name))
             .map(|variant| FieldTarget {
                 type_id,
                 name: variant.name.clone(),
+                type_name: Some(name.clone()),
             }),
         _ => None,
     }
@@ -786,43 +879,46 @@ pub(crate) fn field_declaration_ranges(
     symbols: &SymbolTable,
     target: &FieldTarget,
 ) -> Vec<TextRange> {
-    let Some(type_name) = symbols.type_name(target.type_id) else {
-        return Vec::new();
-    };
-
+    let target_type_id = symbols.resolve_alias_type(target.type_id);
     let mut ranges = Vec::new();
     for type_decl in root
         .descendants()
         .filter(|n| n.kind() == SyntaxKind::TypeDecl)
     {
-        let Some(type_name_node) = type_decl.children().find(|n| n.kind() == SyntaxKind::Name)
-        else {
-            continue;
-        };
-        let Some(type_ident) = ident_token_in_name(&type_name_node) else {
-            continue;
-        };
-        if !type_ident.text().eq_ignore_ascii_case(&type_name) {
-            continue;
-        }
+        let mut current_type_name: Option<SmolStr> = None;
+        for child in type_decl.children() {
+            if child.kind() == SyntaxKind::Name {
+                current_type_name = name_from_name_node(&child);
+                continue;
+            }
+            if !matches!(child.kind(), SyntaxKind::StructDef | SyntaxKind::UnionDef) {
+                continue;
+            }
 
-        let struct_def = type_decl
-            .children()
-            .find(|n| matches!(n.kind(), SyntaxKind::StructDef | SyntaxKind::UnionDef));
-        let Some(struct_def) = struct_def else {
-            continue;
-        };
+            let Some(type_name) = current_type_name.as_ref() else {
+                continue;
+            };
+            let Some(declared_type_id) = symbols.lookup_type(type_name.as_str()) else {
+                continue;
+            };
+            let declared_type_id = symbols.resolve_alias_type(declared_type_id);
+            let type_matches = declared_type_id == target_type_id
+                || target
+                    .type_name
+                    .as_ref()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(type_name.as_str()));
+            if !type_matches {
+                continue;
+            }
 
-        for var_decl in struct_def
-            .children()
-            .filter(|n| n.kind() == SyntaxKind::VarDecl)
-        {
-            for name_node in var_decl.children().filter(|n| n.kind() == SyntaxKind::Name) {
-                let Some(ident) = ident_token_in_name(&name_node) else {
-                    continue;
-                };
-                if ident.text().eq_ignore_ascii_case(&target.name) {
-                    ranges.push(ident.text_range());
+            for var_decl in child.children().filter(|n| n.kind() == SyntaxKind::VarDecl) {
+                for name_node in var_decl.children().filter(|n| n.kind() == SyntaxKind::Name) {
+                    let Some(ident) = ident_token_in_name(&name_node) else {
+                        continue;
+                    };
+                    if ident.text().eq_ignore_ascii_case(&target.name) {
+                        ranges.push(ident.text_range());
+                    }
                 }
             }
         }
