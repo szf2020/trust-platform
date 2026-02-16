@@ -184,10 +184,18 @@ fn detect_context(root: &SyntaxNode, position: TextSize) -> CompletionContext {
             }
 
             // Inside a VAR block (but not in a type ref)
-            SyntaxKind::VarBlock => return CompletionContext::VarBlock,
+            SyntaxKind::VarBlock => {
+                if is_recovered_statement_position(&ancestor, position) {
+                    return CompletionContext::Statement;
+                }
+                return CompletionContext::VarBlock;
+            }
 
             // Inside a VAR declaration (for type context)
             SyntaxKind::VarDecl => {
+                if is_recovered_statement_position(&ancestor, position) {
+                    return CompletionContext::Statement;
+                }
                 // Check if we're after the colon (type context)
                 if has_colon_before_position(&ancestor, position) {
                     return CompletionContext::TypeAnnotation;
@@ -225,6 +233,18 @@ fn detect_context(root: &SyntaxNode, position: TextSize) -> CompletionContext {
     }
 
     CompletionContext::General
+}
+
+fn is_recovered_statement_position(node: &SyntaxNode, position: TextSize) -> bool {
+    node.ancestors().any(|ancestor| {
+        matches!(
+            ancestor.kind(),
+            SyntaxKind::Program
+                | SyntaxKind::Function
+                | SyntaxKind::FunctionBlock
+                | SyntaxKind::Method
+        ) && is_past_var_blocks(&ancestor, position)
+    })
 }
 
 /// Finds the token at or just before a position.
@@ -1643,6 +1663,58 @@ END_PROGRAM
         assert!(items.iter().any(|item| item.label == "Next"));
         assert!(items.iter().any(|item| item.label == "Value"));
         assert!(!items.iter().any(|item| item.label == "x"));
+    }
+
+    #[test]
+    fn test_completion_recovery_in_statement_context_keeps_scope_symbols() {
+        let source = r#"
+PROGRAM PlantProgram
+VAR
+    Pump : FB_Pump;
+    Cmd : ST_PumpCommand;
+    Status : ST_PumpStatus;
+    HaltReq : BOOL;
+END_VAR
+
+Sta|
+Pump(Command := Cmd);
+Status := Pump.Status;
+HaltReq := FALSE;
+END_PROGRAM
+"#;
+        let cursor = source.find('|').expect("cursor");
+        let mut cleaned = source.to_string();
+        cleaned.remove(cursor);
+
+        let mut db = Database::new();
+        let file_id = FileId(0);
+        db.set_source_text(file_id, cleaned);
+
+        let items = complete(&db, file_id, TextSize::from(cursor as u32));
+        assert!(
+            items
+                .iter()
+                .any(|item| item.label.eq_ignore_ascii_case("Status")),
+            "completion should include local variable Status in recovered statement context"
+        );
+        assert!(
+            items
+                .iter()
+                .any(|item| item.label.eq_ignore_ascii_case("Cmd")),
+            "completion should include local variable Cmd in recovered statement context"
+        );
+        assert!(
+            items
+                .iter()
+                .any(|item| item.label.eq_ignore_ascii_case("Pump")),
+            "completion should include local variable Pump in recovered statement context"
+        );
+        assert!(
+            items
+                .iter()
+                .any(|item| item.label.eq_ignore_ascii_case("HaltReq")),
+            "completion should include local variable HaltReq in recovered statement context"
+        );
     }
 
     #[test]

@@ -27,6 +27,17 @@ results when WASM requests fail or time out.
 3. Open:
    `http://localhost:8000/`
 
+### Manual smoke checks (strict WASM/LSP path)
+
+1. Open `program.st`, place the cursor on a new line inside the program body, type `Sta`,
+   and trigger completion (`Ctrl+Space`):
+   expected suggestions include `Status`.
+2. In the same location type `Pu` and trigger completion:
+   expected suggestions include `Pump`.
+3. Open `fb_pump.st` and hover `FB_Pump`:
+   expected signature text includes `Command : ST_PumpCommand;` and
+   `Status : ST_PumpStatus;` (no `?` placeholders).
+
 ## GitHub Pages deployment
 
 Workflow: `.github/workflows/demo-pages.yml`

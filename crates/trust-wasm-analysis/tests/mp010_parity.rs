@@ -147,6 +147,71 @@ fn completion_for_struct_member_access_returns_expected_members() {
 }
 
 #[test]
+fn completion_for_statement_prefixes_exposes_program_variables() {
+    let cases = [
+        ("Cm", "Cmd"),
+        ("Sta", "Status"),
+        ("Pu", "Pump"),
+        ("Ha", "HaltReq"),
+    ];
+    for (prefix, expected) in cases {
+        let labels = completion_labels_for_program_prefix(prefix);
+        assert!(
+            labels
+                .iter()
+                .any(|label| label.eq_ignore_ascii_case(expected)),
+            "completion should include '{expected}' for prefix '{prefix}', got: {labels:?}"
+        );
+    }
+}
+
+#[test]
+fn hover_function_block_signature_in_wasm_uses_declared_types() {
+    let documents = load_plant_demo_documents();
+    let fb_uri = "memory:///plant_demo/fb_pump.st";
+    let fb_text = documents
+        .iter()
+        .find(|doc| doc.uri == fb_uri)
+        .map(|doc| doc.text.as_str())
+        .expect("fb source exists");
+    let hover_offset = fb_text.find("FB_Pump").expect("fb name exists") as u32;
+
+    let request = HoverRequest {
+        uri: fb_uri.to_string(),
+        position: offset_to_position_utf16(fb_text, hover_offset),
+    };
+    let mut engine = BrowserAnalysisEngine::new();
+    engine
+        .replace_documents(documents)
+        .expect("load plant demo documents");
+    let hover = engine
+        .hover(request)
+        .expect("hover request should succeed")
+        .expect("hover payload should exist");
+
+    assert!(
+        hover.contents.contains("Command : ST_PumpCommand;"),
+        "hover should include declared input type; hover: {}",
+        hover.contents
+    );
+    assert!(
+        hover.contents.contains("Status : ST_PumpStatus;"),
+        "hover should include declared output type; hover: {}",
+        hover.contents
+    );
+    assert!(
+        !hover.contents.contains("Command : ?;"),
+        "hover should not use unknown placeholder for Command; hover: {}",
+        hover.contents
+    );
+    assert!(
+        !hover.contents.contains("Status : ?;"),
+        "hover should not use unknown placeholder for Status; hover: {}",
+        hover.contents
+    );
+}
+
+#[test]
 fn wasm_json_adapter_contract_is_stable() {
     let mut engine = WasmAnalysisEngine::new();
     let bad_json = engine
@@ -501,6 +566,40 @@ fn process_memory_kib() -> Option<u64> {
     None
 }
 
+fn completion_labels_for_program_prefix(prefix: &str) -> Vec<String> {
+    let mut documents = load_plant_demo_documents();
+    let program_uri = "memory:///plant_demo/program.st";
+    let program_index = documents
+        .iter()
+        .position(|doc| doc.uri == program_uri)
+        .expect("program source exists");
+    let anchor = "Pump(Command := Cmd);";
+    let anchor_offset = documents[program_index]
+        .text
+        .find(anchor)
+        .expect("anchor statement exists");
+    let (before, after) = documents[program_index].text.split_at(anchor_offset);
+    let updated_program = format!("{before}{prefix}\n{after}");
+    let completion_offset = anchor_offset as u32 + prefix.len() as u32;
+    documents[program_index].text = updated_program;
+
+    let request = CompletionRequest {
+        uri: program_uri.to_string(),
+        position: offset_to_position_utf16(&documents[program_index].text, completion_offset),
+        limit: Some(80),
+    };
+    let mut engine = BrowserAnalysisEngine::new();
+    engine
+        .replace_documents(documents)
+        .expect("load plant demo documents");
+    engine
+        .completion(request)
+        .expect("completion should succeed")
+        .into_iter()
+        .map(|item| item.label)
+        .collect()
+}
+
 #[cfg(not(target_os = "linux"))]
 fn process_memory_kib() -> Option<u64> {
     None
@@ -606,9 +705,14 @@ fn native_completion(
             &StdlibFilter::allow_all(),
         )
     });
+    let typed_prefix = completion_prefix_at_offset(source, offset);
     items.sort_by(|left, right| {
-        left.sort_priority
-            .cmp(&right.sort_priority)
+        completion_match_rank(left.label.as_str(), typed_prefix.as_deref())
+            .cmp(&completion_match_rank(
+                right.label.as_str(),
+                typed_prefix.as_deref(),
+            ))
+            .then_with(|| left.sort_priority.cmp(&right.sort_priority))
             .then_with(|| left.label.cmp(&right.label))
     });
     let limit = request.limit.unwrap_or(50).clamp(1, 500) as usize;
@@ -630,6 +734,47 @@ fn native_completion(
             sort_priority: item.sort_priority,
         })
         .collect()
+}
+
+fn completion_prefix_at_offset(source: &str, offset: u32) -> Option<String> {
+    let bytes = source.as_bytes();
+    let mut cursor = (offset as usize).min(bytes.len());
+    let end = cursor;
+    while cursor > 0 && is_ident_byte(bytes[cursor - 1]) {
+        cursor -= 1;
+    }
+    if cursor == end {
+        return None;
+    }
+    let prefix = &source[cursor..end];
+    if prefix.is_empty() {
+        return None;
+    }
+    Some(prefix.to_ascii_uppercase())
+}
+
+fn completion_match_rank(label: &str, typed_prefix: Option<&str>) -> u8 {
+    let Some(prefix) = typed_prefix else {
+        return 2;
+    };
+    if prefix.is_empty() {
+        return 2;
+    }
+    let label_upper = label.to_ascii_uppercase();
+    if label_upper == prefix {
+        return 0;
+    }
+    if label_upper.starts_with(prefix) {
+        return 1;
+    }
+    if label_upper.contains(prefix) {
+        return 2;
+    }
+    3
+}
+
+fn is_ident_byte(byte: u8) -> bool {
+    matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_')
 }
 
 fn completion_kind_label(kind: trust_ide::CompletionKind) -> &'static str {

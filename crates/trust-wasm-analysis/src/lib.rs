@@ -313,9 +313,14 @@ impl BrowserAnalysisEngine {
                 &StdlibFilter::allow_all(),
             )
         });
+        let typed_prefix = completion_prefix_at_offset(source, offset);
         items.sort_by(|left, right| {
-            left.sort_priority
-                .cmp(&right.sort_priority)
+            completion_match_rank(left.label.as_str(), typed_prefix.as_deref())
+                .cmp(&completion_match_rank(
+                    right.label.as_str(),
+                    typed_prefix.as_deref(),
+                ))
+                .then_with(|| left.sort_priority.cmp(&right.sort_priority))
                 .then_with(|| left.label.cmp(&right.label))
         });
         let limit = request.limit.unwrap_or(50).clamp(1, 500) as usize;
@@ -625,6 +630,47 @@ fn json_string<T: Serialize>(value: &T) -> Result<String, String> {
 
 fn source_key(uri: &str) -> SourceKey {
     SourceKey::from_virtual(uri.to_string())
+}
+
+fn completion_prefix_at_offset(source: &str, offset: u32) -> Option<String> {
+    let bytes = source.as_bytes();
+    let mut cursor = (offset as usize).min(bytes.len());
+    let end = cursor;
+    while cursor > 0 && is_ident_byte(bytes[cursor - 1]) {
+        cursor -= 1;
+    }
+    if cursor == end {
+        return None;
+    }
+    let prefix = &source[cursor..end];
+    if prefix.is_empty() {
+        return None;
+    }
+    Some(prefix.to_ascii_uppercase())
+}
+
+fn completion_match_rank(label: &str, typed_prefix: Option<&str>) -> u8 {
+    let Some(prefix) = typed_prefix else {
+        return 2;
+    };
+    if prefix.is_empty() {
+        return 2;
+    }
+    let label_upper = label.to_ascii_uppercase();
+    if label_upper == prefix {
+        return 0;
+    }
+    if label_upper.starts_with(prefix) {
+        return 1;
+    }
+    if label_upper.contains(prefix) {
+        return 2;
+    }
+    3
+}
+
+fn is_ident_byte(byte: u8) -> bool {
+    matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_')
 }
 
 fn completion_kind_label(kind: trust_ide::CompletionKind) -> &'static str {
