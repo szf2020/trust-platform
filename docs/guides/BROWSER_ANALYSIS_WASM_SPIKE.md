@@ -1,6 +1,6 @@
 # Browser Analysis WASM Spike (Deliverable 10)
 
-Last updated: 2026-02-12
+Last updated: 2026-02-15
 
 This guide defines the Deliverable 10 browser-analysis spike contract:
 - worker-based browser transport
@@ -14,6 +14,7 @@ Supported workflows:
 - diagnostics
 - hover
 - completion
+- runtime-web-UI visual parity (shared palette/logo/layout) with dark/light theme toggle
 
 Supported transport model:
 - browser `Worker` message protocol with request IDs
@@ -39,6 +40,8 @@ Browser host prototype assets:
   - `docs/internal/prototypes/browser_analysis_wasm_spike/web/worker.js`
   - `docs/internal/prototypes/browser_analysis_wasm_spike/web/main.js`
   - `docs/internal/prototypes/browser_analysis_wasm_spike/web/index.html`
+  - `docs/internal/prototypes/browser_analysis_wasm_spike/web/openplc-shell.html`
+  - `docs/internal/prototypes/browser_analysis_wasm_spike/web/analysis-client.js`
 
 ## API Boundary
 
@@ -87,11 +90,29 @@ Browser build pipeline:
 scripts/build_browser_analysis_wasm_spike.sh
 ```
 
+One-command demo runner:
+
+```bash
+scripts/run_browser_analysis_wasm_spike_demo.sh
+```
+
 Manual browser run:
 
 ```bash
-python3 -m http.server 4173 --directory target/browser-analysis-wasm/web
+python3 -m http.server 4173 --directory target/browser-analysis-wasm
 ```
+
+Open:
+
+```text
+http://127.0.0.1:4173/web/
+```
+
+Partner demo docs:
+- `docs/guides/BROWSER_ANALYSIS_WASM_DEMO_SCRIPT.md`
+- `docs/guides/BROWSER_ANALYSIS_WASM_INTEGRATION_BRIEF.md`
+- `docs/guides/BROWSER_ANALYSIS_WASM_OPENPLC_EVENT_MAPPING.md`
+- `docs/guides/BROWSER_ANALYSIS_WASM_PARTNER_ACCEPTANCE_CHECKLIST.md`
 
 ## Parity and Performance Evidence (Local Spike)
 

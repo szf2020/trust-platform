@@ -1,90 +1,212 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>truST Web IDE (Preview)</title>
-  <style>
-    :root {
-      color-scheme: light;
-      --bg: #f6f7f9;
-      --panel: #ffffff;
-      --ink: #1d232f;
-      --muted: #546174;
-      --accent: #0b6fcc;
-      --warn: #9f3a00;
-      --border: #d8dde7;
-    }
-
-    * { box-sizing: border-box; }
-
-    body {
-      margin: 0;
-      font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
-      background: radial-gradient(1300px 400px at 5% -15%, #d8e8ff 0%, var(--bg) 60%);
-      color: var(--ink);
-      min-height: 100vh;
-      display: grid;
-      place-items: center;
-      padding: 1.5rem;
-    }
-
-    main {
-      width: min(860px, 100%);
-      border: 1px solid var(--border);
-      background: var(--panel);
-      border-radius: 14px;
-      padding: 1.5rem;
-      box-shadow: 0 14px 40px rgba(14, 19, 25, 0.08);
-    }
-
-    h1 {
-      margin: 0 0 0.5rem;
-      font-size: clamp(1.15rem, 3.2vw, 1.75rem);
-      letter-spacing: -0.01em;
-    }
-
-    p {
-      margin: 0 0 0.9rem;
-      color: var(--muted);
-      line-height: 1.45;
-    }
-
-    code {
-      background: #eef4fd;
-      border: 1px solid #d3e3f8;
-      border-radius: 0.35rem;
-      padding: 0.1rem 0.35rem;
-      font-size: 0.92em;
-      color: #134d85;
-    }
-
-    .banner {
-      margin-top: 1rem;
-      border: 1px solid #ffd6bf;
-      background: #fff4ec;
-      color: var(--warn);
-      border-radius: 0.6rem;
-      padding: 0.75rem 0.9rem;
-      font-size: 0.95rem;
-    }
-  </style>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>truST Web IDE</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"/>
+  <link rel="stylesheet" href="/styles.css"/>
+  <link rel="stylesheet" href="/ide/ide.css"/>
 </head>
 <body>
-  <main>
-    <h1>truST Web IDE Preview</h1>
-    <p>
-      This preview exposes a secure API baseline for remote Structured Text editing.
-      Use <code>/api/ide/capabilities</code> and <code>/api/ide/session</code> to bootstrap a client.
-    </p>
-    <p>
-      Authoring writes are intentionally gated behind runtime debug mode and optimistic
-      version checks to avoid accidental production edits.
-    </p>
-    <div class="banner">
-      UI editing widgets are not shipped in this phase. MP-043 currently provides API contracts,
-      auth/session hardening, and conflict-safe document operations.
+<a class="skip-link" href="#ideMain">Skip to IDE content</a>
+<div class="ide-layout">
+  <aside class="ide-sidebar" aria-label="IDE sidebar">
+    <div class="ide-brand">
+      <svg class="brand-logo" viewBox="0 0 160 80">
+        <text x="20" y="50" class="logo-text">tru<tspan class="logo-accent">ST</tspan></text>
+        <text x="20" y="70" class="logo-tagline">open source plc toolchain</text>
+      </svg>
+    </div>
+
+    <div>
+      <div class="eyebrow">Files</div>
+      <div class="ide-file-toolbar">
+        <input id="fileFilterInput" type="text" placeholder="Filter files..." aria-label="Filter files"/>
+        <div class="ide-file-actions">
+          <button id="newFileBtn" type="button" aria-label="Create file" title="New File"><svg viewBox="0 0 16 16"><path d="M4 2h5l4 4v8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/><path d="M9 2v4h4"/><path d="M8 9v4M6 11h4"/></svg></button>
+          <button id="newFolderBtn" type="button" aria-label="Create folder" title="New Folder"><svg viewBox="0 0 16 16"><path d="M2 13V4a1 1 0 0 1 1-1h3.5l2 2H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/><path d="M8 7v4M6 9h4"/></svg></button>
+          <button id="renamePathBtn" type="button" aria-label="Rename selected path" title="Rename"><svg viewBox="0 0 16 16"><path d="M11.5 2.5l2 2-8 8H3.5v-2z"/><path d="M9.5 4.5l2 2"/></svg></button>
+          <button id="deletePathBtn" type="button" aria-label="Delete selected path" title="Delete"><svg viewBox="0 0 16 16"><path d="M3 4h10"/><path d="M5 4V3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1"/><path d="M5 4v9a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1V4"/></svg></button>
+        </div>
+      </div>
+      <div id="scopeNote" class="muted ide-policy-note">Explorer scope: no project selected.</div>
+      <div id="fileTree" class="ide-files ide-tree" role="tree" aria-label="Source file tree"></div>
+    </div>
+
+    <div class="sidebar-footer">
+      <div id="connectionBadge" class="ide-badge">offline</div>
+      <div id="saveBadge" class="ide-badge">idle</div>
+      <button class="toggle" id="themeToggle" type="button">Dark mode</button>
+    </div>
+  </aside>
+  <div id="sidebarResizeHandle" class="ide-resize-handle" aria-hidden="true"></div>
+
+  <main class="ide-main" id="ideMain">
+    <header class="ide-meta">
+      <h1 id="ideTitle">truST IDE</h1>
+      <div class="ide-top-actions">
+        <button class="btn ghost" id="openProjectBtn" type="button" title="Open Folder" aria-label="Open project folder"><svg width="16" height="16"><path d="M2 13V4a1 1 0 0 1 1-1h3.5l2 2H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg></button>
+        <button class="btn ghost" id="quickOpenBtn" type="button" title="Quick Open" aria-label="Quick open file"><svg width="16" height="16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg></button>
+        <button class="btn ghost" id="cmdPaletteBtn" type="button" title="Command Palette" aria-label="Open command palette"><svg width="16" height="16"><path d="M4 4h8M4 8h8M4 12h5"/><path d="M12 10l2 2-2 2"/></svg></button>
+        <span class="ide-toolbar-separator"></span>
+        <button class="btn ghost" id="validateBtn" type="button" title="Validate" aria-label="Validate project"><svg width="16" height="16"><path d="M4 8l3 3 5-6"/><circle cx="8" cy="8" r="6.5" fill="none"/></svg></button>
+        <button class="btn ghost" id="buildBtn" type="button" title="Build" aria-label="Build project"><svg width="16" height="16"><path d="M3 10l4-7v5h3l-4 7v-5H3z"/></svg></button>
+        <button class="btn ghost" id="testBtn" type="button" title="Test" aria-label="Run project tests"><svg width="16" height="16"><path d="M5 3v10l8-5z"/></svg></button>
+        <span class="ide-toolbar-separator"></span>
+        <button class="btn ghost" id="splitBtn" type="button" title="Split" aria-label="Toggle split editor"><svg width="16" height="16"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M8 3v10"/></svg></button>
+        <button class="btn secondary" id="saveBtn" type="button" title="Save" aria-label="Save active file"><svg width="16" height="16"><path d="M3 3v10a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V6l-3-3H4a1 1 0 0 0-1 1z"/><path d="M10 3v3h3"/><path d="M6 11h4"/></svg></button>
+        <button class="btn secondary" id="saveAllBtn" type="button" title="Save All" aria-label="Save all open files"><svg width="16" height="16"><path d="M3 3v10a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V6l-3-3H4a1 1 0 0 0-1 1z"/><path d="M10 3v3h3"/><path d="M6 10h4M6 12h4"/></svg></button>
+      </div>
+    </header>
+
+    <div id="openProjectPanel" class="ide-open-project" role="dialog" aria-label="Open project">
+      <div class="ide-browse-toolbar">
+        <input id="openProjectInput" type="text" placeholder="Enter project path, e.g. /home/user/my-plc-project" aria-label="Project path"/>
+        <button id="browseBtn" class="btn ghost" type="button" title="Browse...">Browse</button>
+      </div>
+      <div id="browseListing" class="ide-browse-list" style="display:none">
+        <div id="browseBreadcrumbs" class="ide-browse-breadcrumbs"></div>
+        <div id="browseEntries" class="ide-browse-entries"></div>
+      </div>
+      <div id="openProjectRecent" class="ide-recent-list"></div>
+      <div class="ide-open-project-actions">
+        <button id="openProjectCancel" class="btn ghost" type="button">Cancel</button>
+        <button id="openProjectOk" class="btn primary" type="button">Open</button>
+      </div>
+    </div>
+
+    <nav id="breadcrumbBar" class="ide-breadcrumbs" aria-label="Active file breadcrumb"></nav>
+
+    <nav id="tabBar" class="ide-tabs" aria-label="Open file tabs"></nav>
+
+    <section class="ide-shell">
+      <article class="ide-editor-card">
+        <div class="ide-card-head">
+          <h2 id="editorTitle">Editor</h2>
+          <span id="cursorLabel" class="muted">Ln 1, Col 1</span>
+        </div>
+        <div class="ide-card-body cm-wrap">
+          <div id="editorWelcome" class="ide-welcome">
+            <svg class="brand-logo" viewBox="0 0 160 80">
+              <text x="20" y="50" class="logo-text">tru<tspan class="logo-accent">ST</tspan></text>
+              <text x="20" y="70" class="logo-tagline">open source plc toolchain</text>
+            </svg>
+            <h2>Welcome to truST Web IDE</h2>
+            <p>Author, validate, and test IEC 61131-3 Structured Text with full language intelligence.</p>
+            <div class="ide-welcome-actions">
+              <button class="btn primary" id="welcomeOpenBtn" type="button">Open Folder</button>
+              <button class="btn ghost" id="welcomeQuickOpenBtn" type="button">Quick Open</button>
+            </div>
+            <div class="muted"><span class="ide-kbd">Ctrl/Cmd+P</span> quick open &middot; <span class="ide-kbd">Ctrl/Cmd+S</span> save &middot; <span class="ide-kbd">Ctrl/Cmd+Shift+P</span> command palette</div>
+          </div>
+          <div id="editorGrid" class="editor-grid" style="display:none">
+            <div class="editor-pane" id="editorPanePrimary">
+              <nav id="tabBarPrimary" class="ide-tab-bar ide-hidden" aria-label="Primary pane tabs"></nav>
+              <div id="editorMount" class="editor-pane-content" aria-label="Primary code editor surface"></div>
+            </div>
+            <div class="editor-pane ide-hidden" id="editorPaneSecondary">
+              <nav id="tabBarSecondary" class="ide-tab-bar" aria-label="Secondary pane tabs"></nav>
+              <div id="editorMountSecondary" class="editor-pane-content" aria-label="Secondary code editor surface"></div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <div id="insightResizeHandle" class="ide-resize-handle secondary" aria-hidden="true"></div>
+
+      <aside class="ide-side-card">
+        <div class="ide-card-head">
+          <h3>Output</h3>
+          <span id="latencyBadge" class="ide-badge">latency --</span>
+        </div>
+        <div class="ide-card-body">
+          <section class="ide-section">
+            <button class="ide-section-header" type="button" aria-expanded="true"><svg viewBox="0 0 12 12"><path d="M3 4.5l3 3 3-3"/></svg><h4>Problems</h4></button>
+            <div class="ide-section-content">
+              <div id="problemsPanel" class="list" aria-live="polite"></div>
+            </div>
+          </section>
+          <section class="ide-section collapsed">
+            <button class="ide-section-header" type="button" aria-expanded="false"><svg viewBox="0 0 12 12"><path d="M3 4.5l3 3 3-3"/></svg><h4>References</h4></button>
+            <div class="ide-section-content">
+              <div id="referencesPanel" class="list"></div>
+            </div>
+          </section>
+          <section class="ide-section">
+            <button class="ide-section-header" type="button" aria-expanded="true"><svg viewBox="0 0 12 12"><path d="M3 4.5l3 3 3-3"/></svg><h4>Search</h4></button>
+            <div class="ide-section-content">
+              <div id="searchPanel" class="list"></div>
+            </div>
+          </section>
+          <section class="ide-section">
+            <button class="ide-section-header" type="button" aria-expanded="true"><svg viewBox="0 0 12 12"><path d="M3 4.5l3 3 3-3"/></svg><h4>Tasks</h4></button>
+            <div class="ide-section-content">
+              <div id="taskStatus" class="muted">No task running.</div>
+              <button id="retryActionBtn" class="btn ghost" type="button" aria-label="Retry last failed action" disabled>Retry Last Failed</button>
+              <pre id="taskOutput" class="ide-output">Build/Test/Validate output will appear here.</pre>
+              <div id="taskLinksPanel" class="list"></div>
+            </div>
+          </section>
+          <section class="ide-section collapsed">
+            <button class="ide-section-header" type="button" aria-expanded="false"><svg viewBox="0 0 12 12"><path d="M3 4.5l3 3 3-3"/></svg><h4>Health</h4></button>
+            <div class="ide-section-content">
+              <div id="healthPanel" class="ide-health"></div>
+            </div>
+          </section>
+        </div>
+      </aside>
+    </section>
+
+    <div class="ide-statusline" aria-live="polite">
+      <span id="statusMode" style="font-weight:600;color:var(--muted-strong)">--</span>
+      <span id="statusProject" style="color:var(--muted);font-family:var(--ide-font-mono);font-size:11px">--</span>
+      <strong id="statusText">Starting...</strong>
+      <span id="draftInfo">Draft sync idle</span>
+      <span id="a11yInfo" class="sr-only">Focus order: sidebar -> tabs -> editor -> insight panels</span>
     </div>
   </main>
+</div>
+
+<div id="commandPalette" class="ide-modal" role="dialog" aria-modal="true" aria-label="Command palette">
+  <div class="ide-modal-card">
+    <input id="commandInput" type="text" placeholder="Type a command..." aria-label="Command search"/>
+    <div id="commandList" class="ide-command-list"></div>
+  </div>
+</div>
+
+<div id="treeContextMenu" class="ide-context ide-hidden" role="menu" aria-label="Explorer context menu">
+  <button id="ctxOpenBtn" type="button" role="menuitem">Open</button>
+  <button id="ctxNewFileBtn" type="button" role="menuitem">New File</button>
+  <button id="ctxNewFolderBtn" type="button" role="menuitem">New Folder</button>
+  <button id="ctxRenameBtn" type="button" role="menuitem">Rename</button>
+  <button id="ctxDeleteBtn" type="button" role="menuitem">Delete</button>
+</div>
+
+<div id="inputModal" class="ide-input-modal" role="dialog" aria-modal="true" aria-label="Input dialog">
+  <div class="ide-modal-card">
+    <label id="inputModalTitle">Input</label>
+    <input id="inputModalField" type="text" aria-label="Input value"/>
+    <div class="ide-modal-actions">
+      <button id="inputModalCancel" class="btn ghost" type="button">Cancel</button>
+      <button id="inputModalOk" class="btn secondary" type="button">OK</button>
+    </div>
+  </div>
+</div>
+
+<div id="confirmModal" class="ide-confirm-modal" role="dialog" aria-modal="true" aria-label="Confirm dialog">
+  <div class="ide-modal-card">
+    <label id="confirmModalTitle">Confirm</label>
+    <p id="confirmModalMessage" style="margin:0;font-size:14px;color:var(--text);"></p>
+    <div class="ide-modal-actions">
+      <button id="confirmModalCancel" class="btn ghost" type="button">Cancel</button>
+      <button id="confirmModalOk" class="btn secondary" type="button">OK</button>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="/ide/ide.js"></script>
 </body>
 </html>

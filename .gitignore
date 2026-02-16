@@ -18,6 +18,8 @@ editors/vscode/node_modules/
 editors/vscode/out/
 editors/vscode/*.vsix
 editors/vscode/.vscode-test/
+editors/vscode/target/
+crates/trust-runtime/web/ide-frontend/node_modules/
 
 # Local tooling caches
 .claude/
@@ -50,10 +52,40 @@ runtime-*.log.runtime.log
 
 # Internal docs (not for public repo)
 docs/internal/*
+!docs/internal/prototypes/
+docs/internal/prototypes/*
+!docs/internal/prototypes/browser_analysis_wasm_spike/
+docs/internal/prototypes/browser_analysis_wasm_spike/*
+!docs/internal/prototypes/browser_analysis_wasm_spike/README.md
+!docs/internal/prototypes/browser_analysis_wasm_spike/web/
+docs/internal/prototypes/browser_analysis_wasm_spike/web/*
+!docs/internal/prototypes/browser_analysis_wasm_spike/web/index.html
+!docs/internal/prototypes/browser_analysis_wasm_spike/web/main.js
+!docs/internal/prototypes/browser_analysis_wasm_spike/web/worker.js
+!docs/internal/prototypes/browser_analysis_wasm_spike/web/analysis-client.js
+!docs/internal/prototypes/browser_analysis_wasm_spike/web/openplc-shell.html
+!docs/internal/prototypes/browser_analysis_wasm_spike/web/openplc-shell.js
+!docs/internal/prototypes/browser_analysis_wasm_spike/npm/
+docs/internal/prototypes/browser_analysis_wasm_spike/npm/*
+!docs/internal/prototypes/browser_analysis_wasm_spike/npm/trust-wasm-analysis-client/
+docs/internal/prototypes/browser_analysis_wasm_spike/npm/trust-wasm-analysis-client/*
+!docs/internal/prototypes/browser_analysis_wasm_spike/npm/trust-wasm-analysis-client/README.md
+!docs/internal/prototypes/browser_analysis_wasm_spike/npm/trust-wasm-analysis-client/package.json
+!docs/internal/prototypes/browser_analysis_wasm_spike/npm/trust-wasm-analysis-client/index.js
+!docs/internal/prototypes/browser_analysis_wasm_spike/npm/trust-wasm-analysis-client/index.d.ts
+!docs/internal/runtime/
+docs/internal/runtime/*
+!docs/internal/runtime/trust-runtime-web-ide-full-specification.md
 !docs/internal/testing/
 docs/internal/testing/*
 !docs/internal/testing/checklists/
 docs/internal/testing/checklists/*
 !docs/internal/testing/checklists/hmi-complete-implementation-checklist.md
+!docs/internal/testing/checklists/web-ide-full-implementation-checklist.md
+!docs/internal/testing/evidence/
+docs/internal/testing/evidence/*
+!docs/internal/testing/evidence/web-ide-migration-parity-2026-02-15.md
+!docs/internal/testing/evidence/web-ide-accessibility-validation-2026-02-15.md
+!docs/internal/testing/evidence/web-ide-performance-gates-2026-02-15.md
 CLAUDE.md
 AGENTS.md

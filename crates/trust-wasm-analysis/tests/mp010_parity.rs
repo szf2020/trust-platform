@@ -128,6 +128,35 @@ fn wasm_json_adapter_contract_is_stable() {
 }
 
 #[test]
+fn browser_host_smoke_apply_documents_then_diagnostics_round_trip() {
+    let mut engine = WasmAnalysisEngine::new();
+    let docs = vec![DocumentInput {
+        uri: "memory:///smoke.st".to_string(),
+        text: "PROGRAM Main\nVAR\nCounter : INT;\nEND_VAR\nCounter := UnknownSymbol + 1;\nEND_PROGRAM\n"
+            .to_string(),
+    }];
+    let payload = serde_json::to_string(&docs).expect("serialize docs");
+    let apply = engine
+        .apply_documents_json(&payload)
+        .expect("apply documents json");
+    let parsed_apply: ApplyDocumentsResult =
+        serde_json::from_str(&apply).expect("parse apply result");
+    assert_eq!(parsed_apply.documents.len(), 1);
+
+    let diagnostics = engine
+        .diagnostics_json("memory:///smoke.st")
+        .expect("diagnostics json");
+    let parsed: Vec<trust_wasm_analysis::DiagnosticItem> =
+        serde_json::from_str(&diagnostics).expect("parse diagnostics");
+    assert!(
+        parsed
+            .iter()
+            .any(|item| item.message.contains("UnknownSymbol")),
+        "expected unresolved symbol diagnostic in smoke round-trip"
+    );
+}
+
+#[test]
 fn browser_analysis_latency_budget_against_native_is_within_spike_limits() {
     let documents = load_plant_demo_documents();
     let main_uri = "memory:///plant_demo/program.st";
@@ -243,6 +272,143 @@ fn browser_analysis_latency_budget_against_native_is_within_spike_limits() {
     assert_budget("completion", adapter_completion, native_completion);
 }
 
+#[test]
+fn multi_document_incremental_update_flow_handles_realistic_edit_streams() {
+    let mut engine = BrowserAnalysisEngine::new();
+    let mut documents = vec![
+        DocumentInput {
+            uri: "memory:///workspace/main.st".to_string(),
+            text:
+                "PROGRAM Main\nVAR\ncounter : INT;\nEND_VAR\ncounter := counter + 1;\nEND_PROGRAM\n"
+                    .to_string(),
+        },
+        DocumentInput {
+            uri: "memory:///workspace/helpers.st".to_string(),
+            text: "FUNCTION Helper : INT\nHelper := 1;\nEND_FUNCTION\n".to_string(),
+        },
+        DocumentInput {
+            uri: "memory:///workspace/io.st".to_string(),
+            text: "PROGRAM Io\nVAR\nInputA : BOOL;\nEND_VAR\nEND_PROGRAM\n".to_string(),
+        },
+    ];
+
+    engine
+        .replace_documents(documents.clone())
+        .expect("initial documents");
+    assert_eq!(engine.status().document_count, 3);
+
+    for step in 0..40_u32 {
+        documents[0].text = format!(
+            "PROGRAM Main\nVAR\ncounter : INT;\nEND_VAR\ncounter := counter + {};\nEND_PROGRAM\n",
+            step
+        );
+
+        if step % 5 == 0 {
+            documents[1].text =
+                format!("FUNCTION Helper : INT\nHelper := {};\nEND_FUNCTION\n", step);
+        }
+
+        if step % 7 == 0 {
+            documents[2].text =
+                "PROGRAM Io\nVAR\nInputA : BOOL;\nEND_VAR\nInputA := UnknownSymbol;\nEND_PROGRAM\n"
+                    .to_string();
+        } else {
+            documents[2].text =
+                "PROGRAM Io\nVAR\nInputA : BOOL;\nEND_VAR\nEND_PROGRAM\n".to_string();
+        }
+
+        engine
+            .replace_documents(documents.clone())
+            .expect("replace documents");
+
+        let status = engine.status();
+        assert_eq!(status.document_count, 3);
+        assert!(status
+            .uris
+            .iter()
+            .any(|uri| uri == "memory:///workspace/main.st"));
+
+        let diagnostics = engine
+            .diagnostics("memory:///workspace/io.st")
+            .expect("diagnostics");
+        if step % 7 == 0 {
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|item| item.message.contains("UnknownSymbol")),
+                "expected unresolved symbol diagnostic on step {step}"
+            );
+        } else {
+            assert!(
+                diagnostics
+                    .iter()
+                    .all(|item| !item.message.contains("UnknownSymbol")),
+                "unexpected unresolved symbol diagnostic on step {step}"
+            );
+        }
+    }
+}
+
+#[test]
+fn representative_corpus_memory_budget_gate() {
+    let base = load_plant_demo_documents();
+    let mut corpus = Vec::new();
+    for replica in 0..12_u32 {
+        for doc in &base {
+            corpus.push(DocumentInput {
+                uri: doc
+                    .uri
+                    .replace("memory:///", &format!("memory:///replica-{replica}/")),
+                text: doc.text.clone(),
+            });
+        }
+    }
+
+    let before_kib = process_memory_kib();
+
+    let mut engine = BrowserAnalysisEngine::new();
+    engine
+        .replace_documents(corpus.clone())
+        .expect("load representative corpus");
+
+    assert_eq!(engine.status().document_count, corpus.len());
+
+    black_box(
+        engine
+            .diagnostics("memory:///replica-0/plant_demo/program.st")
+            .expect("diagnostics"),
+    );
+    black_box(
+        engine
+            .completion(CompletionRequest {
+                uri: "memory:///replica-0/plant_demo/program.st".to_string(),
+                position: Position {
+                    line: 18,
+                    character: 12,
+                },
+                limit: Some(40),
+            })
+            .expect("completion"),
+    );
+
+    if let (Some(before), Some(after)) = (before_kib, process_memory_kib()) {
+        let delta = after.saturating_sub(before);
+        let absolute = after;
+        assert!(
+            delta <= 350 * 1024,
+            "RSS delta exceeded memory budget: before={} KiB after={} KiB delta={} KiB",
+            before,
+            after,
+            delta
+        );
+        assert!(
+            absolute <= 700 * 1024,
+            "RSS absolute exceeded memory budget: {} KiB",
+            absolute
+        );
+    }
+}
+
 fn assert_budget(name: &str, adapter: Duration, native: Duration) {
     let adapter_us = adapter.as_micros();
     let native_us = native.as_micros();
@@ -274,6 +440,26 @@ fn measure_iterations<T>(iterations: usize, mut op: impl FnMut() -> T) -> Durati
         black_box(op());
     }
     start.elapsed()
+}
+
+#[cfg(target_os = "linux")]
+fn process_memory_kib() -> Option<u64> {
+    let status = fs::read_to_string("/proc/self/status").ok()?;
+    for line in status.lines() {
+        if let Some(rest) = line.strip_prefix("VmRSS:") {
+            let value = rest
+                .split_whitespace()
+                .next()
+                .and_then(|text| text.parse::<u64>().ok())?;
+            return Some(value);
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+fn process_memory_kib() -> Option<u64> {
+    None
 }
 
 fn native_diagnostics(

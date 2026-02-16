@@ -6,7 +6,7 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 
 ## [Unreleased]
 
-Target release: `v0.9.3`
+Target release: `v0.9.5`
 
 ### Added
 
@@ -14,6 +14,24 @@ Target release: `v0.9.3`
   - Added editor lifecycle test coverage to verify running statechart sessions are cleaned up when a custom editor panel is disposed.
   - Added state machine engine behavior tests for awaited hardware action ordering and fail-closed guard evaluation paths.
   - Added runtime client timeout cleanup coverage to ensure request listeners are removed on timeout/error.
+- Web IDE project selection flow:
+  - Added `/api/ide/project` and `/api/ide/project/open` to query/switch active project root at runtime.
+  - Added no-bundle startup support for `trust-runtime run` so `/ide` can start first and open a project folder from the browser.
+  - Added integration coverage for no-bundle project-open flow in `crates/trust-runtime/tests/web_ide_integration.rs`.
+- Web IDE workspace scope hardening:
+  - Changed IDE file/tree scope from fixed `<project>/src` to full active project root with hidden/system path filtering.
+  - Added project-aware command execution guard so build/test/validate require an active project selection.
+  - Added task status timestamps in `/ide` task panel (`started`/`finished`) to satisfy workflow traceability requirements.
+
+- Web IDE full implementation closure for `/ide`:
+  - Added workspace tree + filesystem mutation endpoints and UI flows (`/api/ide/tree`, `/api/ide/fs/create`, `/api/ide/fs/rename`, `/api/ide/fs/move`, `/api/ide/fs/delete`) with conflict-safe errors.
+  - Added IDE navigation/search surface: quick open, workspace text search with include/exclude globs, file/workspace symbol search, and command-palette actions.
+  - Added project-aware language navigation endpoints and UI wiring for go-to-definition, references, and rename (`/api/ide/definition`, `/api/ide/references`, `/api/ide/rename`) with cross-file analysis context.
+  - Added build/test/validate task orchestration endpoints (`/api/ide/build`, `/api/ide/test`, `/api/ide/validate`, `/api/ide/task`) with streaming output, parsed source-location links, and retry UX in the browser IDE.
+  - Added browser IDE format endpoint and command flow (`/api/ide/format`) so formatted content can be applied from the editor command surface.
+  - Added filesystem mutation audit trail endpoint (`/api/ide/fs/audit`) and health counters (`fs_mutation_events`) for IDE security observability.
+  - Added dedicated Web IDE contract/performance/security integration coverage in `crates/trust-runtime/tests/web_ide_integration.rs` and parser/unit coverage in `crates/trust-runtime/src/web.rs` + `crates/trust-runtime/src/web/ide.rs`.
+  - Added a standalone static browser demo at `docs/demo/` with all 7 LSP features running fully client-side through WebAssembly, plus GitHub Pages deployment workflow (`.github/workflows/demo-pages.yml`) for client sharing.
 - EtherCAT bring-up examples:
   - Added `examples/ethercat_ek1100_elx008_v2/` for EK1100 + EL2008-only hardware chains with a validated 8-output snake pattern.
   - Added helper run scripts and docs for real-NIC bring-up and deterministic mock-mode fallback.
@@ -192,6 +210,9 @@ Target release: `v0.9.3`
 - Statechart import command flow now consistently resolves source/target paths and reuses shared URI/path helpers across statechart commands.
 - Statechart hardware helper scripts/docs now use repository-relative paths and group-based socket permissions (`660`) instead of world-writable sockets.
 - Statechart operator/developer guides and helper script output are now standardized to English for consistent repository documentation language.
+- Web IDE visual styling now aligns with the runtime page sidebar theme treatment (surface, spacing, and footer layout) for a consistent `/` and `/ide` experience.
+- Web IDE authoring gating no longer depends on runtime `control_mode=debug`; editor capability is now enforced via web auth role and IDE session role (viewer/editor) at API boundaries.
+- Web IDE performance gates were tightened to product targets (completion/hover p95 <= 150ms, diagnostics p95 <= 300ms, workspace search p95 <= 400ms) in automated integration checks.
 - Standardized example I/O mapping patterns to use `VAR_CONFIG` bindings (instead of direct `%I/%Q` declarations in `VAR`/`VAR_GLOBAL`) across communication, EtherCAT, Siemens, Mitsubishi, and unit-testing tutorial projects.
 - Updated example documentation snippets to reflect `PROGRAM` variables plus `CONFIGURATION`-level `VAR_CONFIG` wiring as the recommended deterministic pattern.
 - Browser/WASM position mapping now uses UTF-16 column semantics for protocol compatibility in `trust-wasm-analysis` range/position conversions.
@@ -250,6 +271,10 @@ Target release: `v0.9.3`
 - Hardware-mode guard handling now fails closed on parse/read/runtime errors instead of allowing unsafe transitions.
 - Runtime control client request timeout/error handling now removes per-request listeners reliably to prevent listener leaks.
 - Statechart traffic-light example now starts from a valid non-dead initial state (`Red`).
+- Web IDE hover behavior now follows VS Code semantics by relying on Monaco hover tooltips; the redundant Output-side Hover panel was removed to prevent duplicate/stale hover text.
+- Web IDE hover provider failures are now logged as `[ide] hover failed:` in browser console output to improve diagnostics when hover requests fail.
+- Web IDE analysis cache refresh now skips unrelated unreadable/oversized `.st` files so hover/completion keep working for the active source, Monaco hover/suggest widgets now use overflow-safe rendering to avoid hidden popups, and `/ide` assets are served with `Cache-Control: no-store` so browser refreshes pick up the latest IDE fixes.
+- Web IDE hover/completion hardening now normalizes Monaco hover content payloads, falls back to local symbol suggestions when completion analysis is unavailable, and debounces hover popup triggering on mouse idle so behavior matches VS Code more closely on Chromium-based runtime kiosks.
 - VS Code extension project workflows now follow `src/`-based projects consistently: ST test run root detection accepts `src`, PLCopen export integration coverage uses `src`, and new-project scaffolding no longer generates legacy `sources/`.
 - CI Windows build no longer fails on missing `wpcap.lib` when `ethercat-wire` is enabled by default; EtherCAT wire dependency wiring is now unix-target gated while preserving mock-driver support cross-platform.
 - MP-001 parity baseline updated for newly added Mitsubishi LSP regression tests so discovery parity gate remains deterministic.

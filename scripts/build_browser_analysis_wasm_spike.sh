@@ -6,6 +6,8 @@ OUT_DIR="${ROOT_DIR}/target/browser-analysis-wasm"
 PKG_DIR="${OUT_DIR}/pkg"
 WEB_SRC="${ROOT_DIR}/docs/internal/prototypes/browser_analysis_wasm_spike/web"
 WEB_OUT="${OUT_DIR}/web"
+RUNTIME_UI_DIR="${ROOT_DIR}/crates/trust-runtime/src/web/ui"
+RUNTIME_ASSETS_DIR="${RUNTIME_UI_DIR}/assets"
 
 if ! command -v wasm-pack >/dev/null 2>&1; then
   echo "error: wasm-pack is required."
@@ -30,9 +32,10 @@ mkdir -p "${PKG_DIR}" "${WEB_OUT}"
     --features wasm
 )
 
-cp "${WEB_SRC}/index.html" "${WEB_OUT}/index.html"
-cp "${WEB_SRC}/main.js" "${WEB_OUT}/main.js"
-cp "${WEB_SRC}/worker.js" "${WEB_OUT}/worker.js"
+cp -R "${WEB_SRC}/." "${WEB_OUT}/"
+cp "${RUNTIME_UI_DIR}/styles.css" "${WEB_OUT}/runtime-styles.css"
+cp "${RUNTIME_ASSETS_DIR}/favicon.svg" "${WEB_OUT}/favicon.svg"
+cp "${RUNTIME_ASSETS_DIR}/logo.svg" "${WEB_OUT}/logo.svg"
 
 cat <<EOF
 WASM browser analysis spike build complete.
@@ -40,7 +43,9 @@ WASM browser analysis spike build complete.
 - Host: ${WEB_OUT}
 
 To run locally:
-  python3 -m http.server 4173 --directory "${WEB_OUT}"
+  python3 -m http.server 4173 --directory "${OUT_DIR}"
 Then open:
-  http://127.0.0.1:4173/
+  http://127.0.0.1:4173/web/
+OpenPLC shell integration demo:
+  http://127.0.0.1:4173/web/openplc-shell.html
 EOF

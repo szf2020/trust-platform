@@ -2,11 +2,15 @@
 
 #![allow(missing_docs)]
 
+use std::collections::HashMap;
+use std::io::{BufRead, BufReader};
 use std::net::ToSocketAddrs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use qrcode::{render::svg, QrCode};
 use serde::{Deserialize, Serialize};
@@ -16,8 +20,7 @@ use tiny_http::{Header, Method, Response, Server, StatusCode};
 
 use crate::bundle_template::{IoConfigTemplate, IoDriverTemplate};
 use crate::config::{
-    load_system_io_config, ControlMode, IoConfig, IoDriverConfig, RuntimeConfig, WebAuthMode,
-    WebConfig,
+    load_system_io_config, IoConfig, IoDriverConfig, RuntimeConfig, WebAuthMode, WebConfig,
 };
 use crate::control::{handle_request_value, ControlState};
 use crate::debug::dap::format_value;
@@ -33,7 +36,7 @@ pub mod ide;
 pub mod pairing;
 
 use deploy::{apply_deploy, apply_rollback, DeployRequest};
-use ide::{IdeError, IdeRole, WebIdeState};
+use ide::{IdeError, IdeRole, WebIdeFrontendTelemetry, WebIdeState};
 use pairing::PairingStore;
 
 #[derive(Debug, Deserialize)]
@@ -91,10 +94,121 @@ struct IdeSessionRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct IdeProjectOpenRequest {
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct IdeWriteRequest {
     path: String,
     expected_version: u64,
     content: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct IdeFsCreateRequest {
+    path: String,
+    kind: Option<String>,
+    content: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IdeFsRenameRequest {
+    path: String,
+    new_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct IdeFsDeleteRequest {
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct IdeDiagnosticsRequest {
+    path: String,
+    content: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IdeFormatRequest {
+    path: String,
+    content: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IdePositionRequest {
+    line: u32,
+    character: u32,
+}
+
+#[derive(Debug, Deserialize)]
+struct IdeHoverRequest {
+    path: String,
+    content: Option<String>,
+    position: IdePositionRequest,
+}
+
+#[derive(Debug, Deserialize)]
+struct IdeCompletionRequest {
+    path: String,
+    content: Option<String>,
+    position: IdePositionRequest,
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IdeReferencesRequest {
+    path: String,
+    content: Option<String>,
+    position: IdePositionRequest,
+    include_declaration: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IdeRenameRequest {
+    path: String,
+    content: Option<String>,
+    position: IdePositionRequest,
+    new_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct IdeFrontendTelemetryRequest {
+    bootstrap_failures: Option<u64>,
+    analysis_timeouts: Option<u64>,
+    worker_restarts: Option<u64>,
+    autosave_failures: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+struct IdeTaskJob {
+    job_id: u64,
+    kind: String,
+    status: String,
+    success: Option<bool>,
+    output: String,
+    started_ms: u64,
+    finished_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct IdeTaskLocation {
+    path: String,
+    line: u32,
+    column: u32,
+    message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct IdeTaskSnapshot {
+    job_id: u64,
+    kind: String,
+    status: String,
+    success: Option<bool>,
+    output: String,
+    locations: Vec<IdeTaskLocation>,
+    started_ms: u64,
+    finished_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,6 +237,13 @@ const HMI_HTML: &str = include_str!("web/ui/hmi.html");
 const HMI_JS: &str = include_str!("web/ui/hmi.js");
 const HMI_CSS: &str = include_str!("web/ui/hmi.css");
 const IDE_HTML: &str = include_str!("web/ui/ide.html");
+const IDE_CSS: &str = include_str!("web/ui/ide.css");
+const IDE_JS: &str = include_str!("web/ui/ide.js");
+const IDE_MONACO_BUNDLE_JS: &str = include_str!("web/ui/assets/ide-monaco.20260215.js");
+const IDE_MONACO_BUNDLE_CSS: &str = include_str!("web/ui/assets/ide-monaco.20260215.css");
+const IDE_LOGO_SVG: &str = include_str!("web/ui/assets/logo.svg");
+const IDE_WASM_WORKER_JS: &str = include_str!("web/ui/wasm/worker.js");
+const IDE_WASM_CLIENT_JS: &str = include_str!("web/ui/wasm/analysis-client.js");
 const HMI_WS_ROUTE: &str = "/ws/hmi";
 const HMI_WS_VALUES_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const HMI_WS_SCHEMA_POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -561,6 +682,8 @@ pub fn start_web_server(
             .map(|root| Arc::new(PairingStore::load(root.join("pairings.json"))))
     });
     let ide_state = Arc::new(WebIdeState::new(bundle_root.clone()));
+    let ide_task_store: Arc<Mutex<HashMap<u64, IdeTaskJob>>> = Arc::new(Mutex::new(HashMap::new()));
+    let ide_task_seq = Arc::new(AtomicU64::new(1));
     let bundle_root = bundle_root.clone();
     let handle = thread::spawn(move || {
         for mut request in server.incoming_requests() {
@@ -660,8 +783,141 @@ pub fn start_web_server(
             }
             if method == Method::Get && (url == "/ide" || url == "/ide/") {
                 let response = Response::from_string(IDE_HTML)
+                    .with_header(Header::from_bytes("Cache-Control", "no-store").unwrap())
                     .with_header(Header::from_bytes("Content-Type", "text/html").unwrap());
                 let _ = request.respond(response);
+                continue;
+            }
+            if method == Method::Get && url == "/ide/ide.css" {
+                let response = Response::from_string(IDE_CSS)
+                    .with_header(Header::from_bytes("Cache-Control", "no-store").unwrap())
+                    .with_header(Header::from_bytes("Content-Type", "text/css").unwrap());
+                let _ = request.respond(response);
+                continue;
+            }
+            if method == Method::Get && url == "/ide/ide.js" {
+                let response = Response::from_string(IDE_JS)
+                    .with_header(Header::from_bytes("Cache-Control", "no-store").unwrap())
+                    .with_header(
+                        Header::from_bytes("Content-Type", "application/javascript").unwrap(),
+                    );
+                let _ = request.respond(response);
+                continue;
+            }
+            if method == Method::Get && url == "/ide/assets/ide-monaco.20260215.js" {
+                let response = Response::from_string(IDE_MONACO_BUNDLE_JS)
+                    .with_header(Header::from_bytes("Cache-Control", "no-store").unwrap())
+                    .with_header(
+                        Header::from_bytes("Content-Type", "application/javascript").unwrap(),
+                    );
+                let _ = request.respond(response);
+                continue;
+            }
+            if method == Method::Get && url == "/ide/assets/ide-monaco.20260215.css" {
+                let response = Response::from_string(IDE_MONACO_BUNDLE_CSS)
+                    .with_header(Header::from_bytes("Cache-Control", "no-store").unwrap())
+                    .with_header(Header::from_bytes("Content-Type", "text/css").unwrap());
+                let _ = request.respond(response);
+                continue;
+            }
+            if method == Method::Get && url == "/ide/assets/logo.svg" {
+                let response = Response::from_string(IDE_LOGO_SVG)
+                    .with_header(Header::from_bytes("Cache-Control", "no-store").unwrap())
+                    .with_header(Header::from_bytes("Content-Type", "image/svg+xml").unwrap());
+                let _ = request.respond(response);
+                continue;
+            }
+            if method == Method::Get && url == "/ide/wasm/worker.js" {
+                let response = Response::from_string(IDE_WASM_WORKER_JS)
+                    .with_header(Header::from_bytes("Cache-Control", "no-store").unwrap())
+                    .with_header(
+                        Header::from_bytes("Content-Type", "application/javascript").unwrap(),
+                    );
+                let _ = request.respond(response);
+                continue;
+            }
+            if method == Method::Get && url == "/ide/wasm/analysis-client.js" {
+                let response = Response::from_string(IDE_WASM_CLIENT_JS)
+                    .with_header(Header::from_bytes("Cache-Control", "no-store").unwrap())
+                    .with_header(
+                        Header::from_bytes("Content-Type", "application/javascript").unwrap(),
+                    );
+                let _ = request.respond(response);
+                continue;
+            }
+            if method == Method::Get && url == "/ide/wasm/trust_wasm_analysis.js" {
+                let wasm_pkg_dir = std::env::current_exe()
+                    .ok()
+                    .and_then(|exe| exe.parent().map(|p| p.to_path_buf()))
+                    .map(|p| p.join("../../target/browser-analysis-wasm/pkg"))
+                    .or_else(|| {
+                        std::env::var("CARGO_MANIFEST_DIR").ok().map(|d| {
+                            PathBuf::from(d).join("../../target/browser-analysis-wasm/pkg")
+                        })
+                    })
+                    .unwrap_or_else(|| PathBuf::from("target/browser-analysis-wasm/pkg"));
+                let js_path = wasm_pkg_dir.join("trust_wasm_analysis.js");
+                match std::fs::read_to_string(&js_path) {
+                    Ok(js_content) => {
+                        let response = Response::from_string(js_content)
+                            .with_header(Header::from_bytes("Cache-Control", "no-store").unwrap())
+                            .with_header(
+                                Header::from_bytes("Content-Type", "application/javascript")
+                                    .unwrap(),
+                            );
+                        let _ = request.respond(response);
+                    }
+                    Err(_) => {
+                        let response = Response::from_string(
+                            json!({ "ok": false, "error": "WASM JS glue not found. Run scripts/build_browser_analysis_wasm_spike.sh" }).to_string(),
+                        )
+                        .with_status_code(StatusCode(404))
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                        let _ = request.respond(response);
+                    }
+                }
+                continue;
+            }
+            if method == Method::Get && url == "/ide/wasm/trust_wasm_analysis_bg.wasm" {
+                let wasm_pkg_dir = std::env::current_exe()
+                    .ok()
+                    .and_then(|exe| exe.parent().map(|p| p.to_path_buf()))
+                    .map(|p| p.join("../../target/browser-analysis-wasm/pkg"))
+                    .or_else(|| {
+                        std::env::var("CARGO_MANIFEST_DIR").ok().map(|d| {
+                            PathBuf::from(d).join("../../target/browser-analysis-wasm/pkg")
+                        })
+                    })
+                    .unwrap_or_else(|| PathBuf::from("target/browser-analysis-wasm/pkg"));
+                let wasm_path = wasm_pkg_dir.join("trust_wasm_analysis_bg.wasm");
+                match std::fs::read(&wasm_path) {
+                    Ok(wasm_bytes) => {
+                        let cursor = std::io::Cursor::new(wasm_bytes);
+                        let response = Response::new(
+                            StatusCode(200),
+                            vec![
+                                Header::from_bytes("Cache-Control", "no-store").unwrap(),
+                                Header::from_bytes("Content-Type", "application/wasm").unwrap(),
+                            ],
+                            cursor,
+                            None,
+                            None,
+                        );
+                        let _ = request.respond(response);
+                    }
+                    Err(_) => {
+                        let response = Response::from_string(
+                            json!({ "ok": false, "error": "WASM binary not found. Run scripts/build_browser_analysis_wasm_spike.sh" }).to_string(),
+                        )
+                        .with_status_code(StatusCode(404))
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                        let _ = request.respond(response);
+                    }
+                }
                 continue;
             }
             if method == Method::Get && url == "/hmi/export.json" {
@@ -1141,7 +1397,7 @@ pub fn start_web_server(
                 continue;
             }
             if method == Method::Get && url == "/api/ide/capabilities" {
-                let _request_token = match check_auth(
+                let (web_role, _request_token) = match check_auth_with_role(
                     &request,
                     auth,
                     &auth_token,
@@ -1154,7 +1410,7 @@ pub fn start_web_server(
                         continue;
                     }
                 };
-                let caps = ide_state.capabilities(ide_write_enabled(&control_state));
+                let caps = ide_state.capabilities(web_role.allows(AccessRole::Engineer));
                 let response =
                     Response::from_string(json!({ "ok": true, "result": caps }).to_string())
                         .with_header(
@@ -1164,7 +1420,7 @@ pub fn start_web_server(
                 continue;
             }
             if method == Method::Post && url == "/api/ide/session" {
-                let _request_token = match check_auth(
+                let (web_role, _request_token) = match check_auth_with_role(
                     &request,
                     auth,
                     &auth_token,
@@ -1206,10 +1462,93 @@ pub fn start_web_server(
                     .as_deref()
                     .and_then(IdeRole::parse)
                     .unwrap_or(IdeRole::Viewer);
+                if matches!(role, IdeRole::Editor) && !web_role.allows(AccessRole::Engineer) {
+                    let response = Response::from_string(
+                        json!({
+                            "ok": false,
+                            "error": "editor session requires engineer/admin web role"
+                        })
+                        .to_string(),
+                    )
+                    .with_status_code(StatusCode(403))
+                    .with_header(Header::from_bytes("Content-Type", "application/json").unwrap());
+                    let _ = request.respond(response);
+                    continue;
+                }
                 match ide_state.create_session(role) {
                     Ok(session) => {
                         let response = Response::from_string(
                             json!({ "ok": true, "result": session }).to_string(),
+                        )
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                        let _ = request.respond(response);
+                    }
+                    Err(error) => {
+                        let _ = request.respond(ide_error_response(error));
+                    }
+                }
+                continue;
+            }
+            if method == Method::Get && url == "/api/ide/project" {
+                let Some(session_token) = ide_session_token(&request) else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "missing X-Trust-Ide-Session" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(401));
+                    let _ = request.respond(response);
+                    continue;
+                };
+                match ide_state.project_selection(session_token.as_str()) {
+                    Ok(selection) => {
+                        let response = Response::from_string(
+                            json!({ "ok": true, "result": selection }).to_string(),
+                        )
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                        let _ = request.respond(response);
+                    }
+                    Err(error) => {
+                        let _ = request.respond(ide_error_response(error));
+                    }
+                }
+                continue;
+            }
+            if method == Method::Post && url == "/api/ide/project/open" {
+                let Some(session_token) = ide_session_token(&request) else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "missing X-Trust-Ide-Session" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(401));
+                    let _ = request.respond(response);
+                    continue;
+                };
+                let mut body = String::new();
+                if request.as_reader().read_to_string(&mut body).is_err() {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "invalid body" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(400));
+                    let _ = request.respond(response);
+                    continue;
+                }
+                let payload: IdeProjectOpenRequest = match serde_json::from_str(&body) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        let response = Response::from_string(
+                            json!({ "ok": false, "error": "invalid json" }).to_string(),
+                        )
+                        .with_status_code(StatusCode(400));
+                        let _ = request.respond(response);
+                        continue;
+                    }
+                };
+                match ide_state.set_active_project(session_token.as_str(), payload.path.as_str()) {
+                    Ok(selection) => {
+                        let response = Response::from_string(
+                            json!({ "ok": true, "result": selection }).to_string(),
                         )
                         .with_header(
                             Header::from_bytes("Content-Type", "application/json").unwrap(),
@@ -1235,6 +1574,57 @@ pub fn start_web_server(
                     Ok(files) => {
                         let response = Response::from_string(
                             json!({ "ok": true, "result": { "files": files } }).to_string(),
+                        )
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                        let _ = request.respond(response);
+                    }
+                    Err(error) => {
+                        let _ = request.respond(ide_error_response(error));
+                    }
+                }
+                continue;
+            }
+            if method == Method::Get && url == "/api/ide/tree" {
+                let Some(session_token) = ide_session_token(&request) else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "missing X-Trust-Ide-Session" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(401));
+                    let _ = request.respond(response);
+                    continue;
+                };
+                match ide_state.list_tree(session_token.as_str()) {
+                    Ok(tree) => {
+                        let response = Response::from_string(
+                            json!({ "ok": true, "result": { "tree": tree } }).to_string(),
+                        )
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                        let _ = request.respond(response);
+                    }
+                    Err(error) => {
+                        let _ = request.respond(ide_error_response(error));
+                    }
+                }
+                continue;
+            }
+            if method == Method::Get && url.starts_with("/api/ide/browse") {
+                let Some(session_token) = ide_session_token(&request) else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "missing X-Trust-Ide-Session" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(401));
+                    let _ = request.respond(response);
+                    continue;
+                };
+                let path = query_value(url.as_str(), "path");
+                match ide_state.browse_directory(session_token.as_str(), path.as_deref()) {
+                    Ok(result) => {
+                        let response = Response::from_string(
+                            json!({ "ok": true, "result": result }).to_string(),
                         )
                         .with_header(
                             Header::from_bytes("Content-Type", "application/json").unwrap(),
@@ -1340,6 +1730,839 @@ pub fn start_web_server(
                     }
                     Err(error) => {
                         let _ = request.respond(ide_error_response(error));
+                    }
+                }
+                continue;
+            }
+            if method == Method::Post && url == "/api/ide/fs/create" {
+                let Some(session_token) = ide_session_token(&request) else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "missing X-Trust-Ide-Session" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(401));
+                    let _ = request.respond(response);
+                    continue;
+                };
+                let mut body = String::new();
+                if request.as_reader().read_to_string(&mut body).is_err() {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "invalid body" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(400));
+                    let _ = request.respond(response);
+                    continue;
+                }
+                let payload: IdeFsCreateRequest = match serde_json::from_str(&body) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        let response = Response::from_string(
+                            json!({ "ok": false, "error": "invalid json" }).to_string(),
+                        )
+                        .with_status_code(StatusCode(400));
+                        let _ = request.respond(response);
+                        continue;
+                    }
+                };
+                let is_directory = payload.kind.as_deref().is_some_and(|kind| {
+                    kind.eq_ignore_ascii_case("directory") || kind.eq_ignore_ascii_case("dir")
+                });
+                match ide_state.create_entry(
+                    session_token.as_str(),
+                    payload.path.as_str(),
+                    is_directory,
+                    payload.content,
+                    ide_write_enabled(&control_state),
+                ) {
+                    Ok(result) => {
+                        let response = Response::from_string(
+                            json!({ "ok": true, "result": result }).to_string(),
+                        )
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                        let _ = request.respond(response);
+                    }
+                    Err(error) => {
+                        let _ = request.respond(ide_error_response(error));
+                    }
+                }
+                continue;
+            }
+            if method == Method::Post && (url == "/api/ide/fs/rename" || url == "/api/ide/fs/move")
+            {
+                let Some(session_token) = ide_session_token(&request) else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "missing X-Trust-Ide-Session" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(401));
+                    let _ = request.respond(response);
+                    continue;
+                };
+                let mut body = String::new();
+                if request.as_reader().read_to_string(&mut body).is_err() {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "invalid body" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(400));
+                    let _ = request.respond(response);
+                    continue;
+                }
+                let payload: IdeFsRenameRequest = match serde_json::from_str(&body) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        let response = Response::from_string(
+                            json!({ "ok": false, "error": "invalid json" }).to_string(),
+                        )
+                        .with_status_code(StatusCode(400));
+                        let _ = request.respond(response);
+                        continue;
+                    }
+                };
+                match ide_state.rename_entry(
+                    session_token.as_str(),
+                    payload.path.as_str(),
+                    payload.new_path.as_str(),
+                    ide_write_enabled(&control_state),
+                ) {
+                    Ok(result) => {
+                        let response = Response::from_string(
+                            json!({ "ok": true, "result": result }).to_string(),
+                        )
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                        let _ = request.respond(response);
+                    }
+                    Err(error) => {
+                        let _ = request.respond(ide_error_response(error));
+                    }
+                }
+                continue;
+            }
+            if method == Method::Post && url == "/api/ide/fs/delete" {
+                let Some(session_token) = ide_session_token(&request) else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "missing X-Trust-Ide-Session" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(401));
+                    let _ = request.respond(response);
+                    continue;
+                };
+                let mut body = String::new();
+                if request.as_reader().read_to_string(&mut body).is_err() {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "invalid body" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(400));
+                    let _ = request.respond(response);
+                    continue;
+                }
+                let payload: IdeFsDeleteRequest = match serde_json::from_str(&body) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        let response = Response::from_string(
+                            json!({ "ok": false, "error": "invalid json" }).to_string(),
+                        )
+                        .with_status_code(StatusCode(400));
+                        let _ = request.respond(response);
+                        continue;
+                    }
+                };
+                match ide_state.delete_entry(
+                    session_token.as_str(),
+                    payload.path.as_str(),
+                    ide_write_enabled(&control_state),
+                ) {
+                    Ok(result) => {
+                        let response = Response::from_string(
+                            json!({ "ok": true, "result": result }).to_string(),
+                        )
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                        let _ = request.respond(response);
+                    }
+                    Err(error) => {
+                        let _ = request.respond(ide_error_response(error));
+                    }
+                }
+                continue;
+            }
+            if method == Method::Get && url.starts_with("/api/ide/fs/audit") {
+                let Some(session_token) = ide_session_token(&request) else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "missing X-Trust-Ide-Session" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(401));
+                    let _ = request.respond(response);
+                    continue;
+                };
+                let limit = parse_limit(url.as_str()).unwrap_or(40).clamp(1, 200) as usize;
+                match ide_state.fs_audit(session_token.as_str(), limit) {
+                    Ok(events) => {
+                        let response = Response::from_string(
+                            json!({ "ok": true, "result": events }).to_string(),
+                        )
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                        let _ = request.respond(response);
+                    }
+                    Err(error) => {
+                        let _ = request.respond(ide_error_response(error));
+                    }
+                }
+                continue;
+            }
+            if method == Method::Get && url == "/api/ide/health" {
+                let Some(session_token) = ide_session_token(&request) else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "missing X-Trust-Ide-Session" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(401));
+                    let _ = request.respond(response);
+                    continue;
+                };
+                match ide_state.health(session_token.as_str()) {
+                    Ok(health) => {
+                        let response = Response::from_string(
+                            json!({ "ok": true, "result": health }).to_string(),
+                        )
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                        let _ = request.respond(response);
+                    }
+                    Err(error) => {
+                        let _ = request.respond(ide_error_response(error));
+                    }
+                }
+                continue;
+            }
+            if method == Method::Post && url == "/api/ide/frontend-telemetry" {
+                let Some(session_token) = ide_session_token(&request) else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "missing X-Trust-Ide-Session" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(401));
+                    let _ = request.respond(response);
+                    continue;
+                };
+                let mut body = String::new();
+                if request.as_reader().read_to_string(&mut body).is_err() {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "invalid body" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(400));
+                    let _ = request.respond(response);
+                    continue;
+                }
+                let payload: IdeFrontendTelemetryRequest = match serde_json::from_str(&body) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        let response = Response::from_string(
+                            json!({ "ok": false, "error": "invalid json" }).to_string(),
+                        )
+                        .with_status_code(StatusCode(400));
+                        let _ = request.respond(response);
+                        continue;
+                    }
+                };
+                let telemetry = WebIdeFrontendTelemetry {
+                    bootstrap_failures: payload.bootstrap_failures.unwrap_or(0),
+                    analysis_timeouts: payload.analysis_timeouts.unwrap_or(0),
+                    worker_restarts: payload.worker_restarts.unwrap_or(0),
+                    autosave_failures: payload.autosave_failures.unwrap_or(0),
+                };
+                match ide_state.record_frontend_telemetry(session_token.as_str(), telemetry) {
+                    Ok(aggregated) => {
+                        let response = Response::from_string(
+                            json!({ "ok": true, "result": aggregated }).to_string(),
+                        )
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                        let _ = request.respond(response);
+                    }
+                    Err(error) => {
+                        let _ = request.respond(ide_error_response(error));
+                    }
+                }
+                continue;
+            }
+            if method == Method::Get && url == "/api/ide/presence-model" {
+                let Some(session_token) = ide_session_token(&request) else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "missing X-Trust-Ide-Session" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(401));
+                    let _ = request.respond(response);
+                    continue;
+                };
+                if let Err(error) = ide_state.health(session_token.as_str()) {
+                    let _ = request.respond(ide_error_response(error));
+                    continue;
+                }
+                let response = Response::from_string(
+                    json!({
+                        "ok": true,
+                        "result": {
+                            "mode": "out_of_scope_phase_1",
+                            "summary": "Live collaborative cursor/presence is intentionally deferred for first production release.",
+                            "tracking": "See docs/guides/WEB_IDE_COLLABORATION_MODEL.md",
+                        }
+                    })
+                    .to_string(),
+                )
+                .with_header(Header::from_bytes("Content-Type", "application/json").unwrap());
+                let _ = request.respond(response);
+                continue;
+            }
+            if method == Method::Post && url == "/api/ide/diagnostics" {
+                let Some(session_token) = ide_session_token(&request) else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "missing X-Trust-Ide-Session" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(401));
+                    let _ = request.respond(response);
+                    continue;
+                };
+                let mut body = String::new();
+                if request.as_reader().read_to_string(&mut body).is_err() {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "invalid body" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(400));
+                    let _ = request.respond(response);
+                    continue;
+                }
+                let payload: IdeDiagnosticsRequest = match serde_json::from_str(&body) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        let response = Response::from_string(
+                            json!({ "ok": false, "error": "invalid json" }).to_string(),
+                        )
+                        .with_status_code(StatusCode(400));
+                        let _ = request.respond(response);
+                        continue;
+                    }
+                };
+                match ide_state.diagnostics(
+                    session_token.as_str(),
+                    payload.path.as_str(),
+                    payload.content,
+                ) {
+                    Ok(result) => {
+                        let response = Response::from_string(
+                            json!({ "ok": true, "result": result }).to_string(),
+                        )
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                        let _ = request.respond(response);
+                    }
+                    Err(error) => {
+                        let _ = request.respond(ide_error_response(error));
+                    }
+                }
+                continue;
+            }
+            if method == Method::Post && url == "/api/ide/hover" {
+                let Some(session_token) = ide_session_token(&request) else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "missing X-Trust-Ide-Session" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(401));
+                    let _ = request.respond(response);
+                    continue;
+                };
+                let mut body = String::new();
+                if request.as_reader().read_to_string(&mut body).is_err() {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "invalid body" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(400));
+                    let _ = request.respond(response);
+                    continue;
+                }
+                let payload: IdeHoverRequest = match serde_json::from_str(&body) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        let response = Response::from_string(
+                            json!({ "ok": false, "error": "invalid json" }).to_string(),
+                        )
+                        .with_status_code(StatusCode(400));
+                        let _ = request.respond(response);
+                        continue;
+                    }
+                };
+                let position = trust_wasm_analysis::Position {
+                    line: payload.position.line,
+                    character: payload.position.character,
+                };
+                match ide_state.hover(
+                    session_token.as_str(),
+                    payload.path.as_str(),
+                    payload.content,
+                    position,
+                ) {
+                    Ok(result) => {
+                        let response = Response::from_string(
+                            json!({ "ok": true, "result": result }).to_string(),
+                        )
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                        let _ = request.respond(response);
+                    }
+                    Err(error) => {
+                        let _ = request.respond(ide_error_response(error));
+                    }
+                }
+                continue;
+            }
+            if method == Method::Post && url == "/api/ide/completion" {
+                let Some(session_token) = ide_session_token(&request) else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "missing X-Trust-Ide-Session" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(401));
+                    let _ = request.respond(response);
+                    continue;
+                };
+                let mut body = String::new();
+                if request.as_reader().read_to_string(&mut body).is_err() {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "invalid body" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(400));
+                    let _ = request.respond(response);
+                    continue;
+                }
+                let payload: IdeCompletionRequest = match serde_json::from_str(&body) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        let response = Response::from_string(
+                            json!({ "ok": false, "error": "invalid json" }).to_string(),
+                        )
+                        .with_status_code(StatusCode(400));
+                        let _ = request.respond(response);
+                        continue;
+                    }
+                };
+                let position = trust_wasm_analysis::Position {
+                    line: payload.position.line,
+                    character: payload.position.character,
+                };
+                match ide_state.completion(
+                    session_token.as_str(),
+                    payload.path.as_str(),
+                    payload.content,
+                    position,
+                    payload.limit,
+                ) {
+                    Ok(result) => {
+                        let response = Response::from_string(
+                            json!({ "ok": true, "result": result }).to_string(),
+                        )
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                        let _ = request.respond(response);
+                    }
+                    Err(error) => {
+                        let _ = request.respond(ide_error_response(error));
+                    }
+                }
+                continue;
+            }
+            if method == Method::Post && url == "/api/ide/definition" {
+                let Some(session_token) = ide_session_token(&request) else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "missing X-Trust-Ide-Session" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(401));
+                    let _ = request.respond(response);
+                    continue;
+                };
+                let mut body = String::new();
+                if request.as_reader().read_to_string(&mut body).is_err() {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "invalid body" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(400));
+                    let _ = request.respond(response);
+                    continue;
+                }
+                let payload: IdeHoverRequest = match serde_json::from_str(&body) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        let response = Response::from_string(
+                            json!({ "ok": false, "error": "invalid json" }).to_string(),
+                        )
+                        .with_status_code(StatusCode(400));
+                        let _ = request.respond(response);
+                        continue;
+                    }
+                };
+                let position = trust_wasm_analysis::Position {
+                    line: payload.position.line,
+                    character: payload.position.character,
+                };
+                match ide_state.definition(
+                    session_token.as_str(),
+                    payload.path.as_str(),
+                    payload.content,
+                    position,
+                ) {
+                    Ok(result) => {
+                        let response = Response::from_string(
+                            json!({ "ok": true, "result": result }).to_string(),
+                        )
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                        let _ = request.respond(response);
+                    }
+                    Err(error) => {
+                        let _ = request.respond(ide_error_response(error));
+                    }
+                }
+                continue;
+            }
+            if method == Method::Post && url == "/api/ide/references" {
+                let Some(session_token) = ide_session_token(&request) else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "missing X-Trust-Ide-Session" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(401));
+                    let _ = request.respond(response);
+                    continue;
+                };
+                let mut body = String::new();
+                if request.as_reader().read_to_string(&mut body).is_err() {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "invalid body" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(400));
+                    let _ = request.respond(response);
+                    continue;
+                }
+                let payload: IdeReferencesRequest = match serde_json::from_str(&body) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        let response = Response::from_string(
+                            json!({ "ok": false, "error": "invalid json" }).to_string(),
+                        )
+                        .with_status_code(StatusCode(400));
+                        let _ = request.respond(response);
+                        continue;
+                    }
+                };
+                let position = trust_wasm_analysis::Position {
+                    line: payload.position.line,
+                    character: payload.position.character,
+                };
+                match ide_state.references(
+                    session_token.as_str(),
+                    payload.path.as_str(),
+                    payload.content,
+                    position,
+                    payload.include_declaration.unwrap_or(true),
+                ) {
+                    Ok(result) => {
+                        let response = Response::from_string(
+                            json!({ "ok": true, "result": result }).to_string(),
+                        )
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                        let _ = request.respond(response);
+                    }
+                    Err(error) => {
+                        let _ = request.respond(ide_error_response(error));
+                    }
+                }
+                continue;
+            }
+            if method == Method::Post && url == "/api/ide/rename" {
+                let Some(session_token) = ide_session_token(&request) else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "missing X-Trust-Ide-Session" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(401));
+                    let _ = request.respond(response);
+                    continue;
+                };
+                let mut body = String::new();
+                if request.as_reader().read_to_string(&mut body).is_err() {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "invalid body" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(400));
+                    let _ = request.respond(response);
+                    continue;
+                }
+                let payload: IdeRenameRequest = match serde_json::from_str(&body) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        let response = Response::from_string(
+                            json!({ "ok": false, "error": "invalid json" }).to_string(),
+                        )
+                        .with_status_code(StatusCode(400));
+                        let _ = request.respond(response);
+                        continue;
+                    }
+                };
+                let position = trust_wasm_analysis::Position {
+                    line: payload.position.line,
+                    character: payload.position.character,
+                };
+                match ide_state.rename_symbol(
+                    session_token.as_str(),
+                    payload.path.as_str(),
+                    payload.content,
+                    position,
+                    payload.new_name.as_str(),
+                    ide_write_enabled(&control_state),
+                ) {
+                    Ok(result) => {
+                        let response = Response::from_string(
+                            json!({ "ok": true, "result": result }).to_string(),
+                        )
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                        let _ = request.respond(response);
+                    }
+                    Err(error) => {
+                        let _ = request.respond(ide_error_response(error));
+                    }
+                }
+                continue;
+            }
+            if method == Method::Get && url.starts_with("/api/ide/search") {
+                let Some(session_token) = ide_session_token(&request) else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "missing X-Trust-Ide-Session" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(401));
+                    let _ = request.respond(response);
+                    continue;
+                };
+                let query = query_value(url.as_str(), "q").unwrap_or_default();
+                let include = query_value(url.as_str(), "include");
+                let exclude = query_value(url.as_str(), "exclude");
+                let limit = parse_limit(url.as_str()).unwrap_or(50).clamp(1, 500) as usize;
+                match ide_state.workspace_search(
+                    session_token.as_str(),
+                    query.as_str(),
+                    include.as_deref(),
+                    exclude.as_deref(),
+                    limit,
+                ) {
+                    Ok(result) => {
+                        let response = Response::from_string(
+                            json!({ "ok": true, "result": result }).to_string(),
+                        )
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                        let _ = request.respond(response);
+                    }
+                    Err(error) => {
+                        let _ = request.respond(ide_error_response(error));
+                    }
+                }
+                continue;
+            }
+            if method == Method::Get && url.starts_with("/api/ide/symbols") {
+                let Some(session_token) = ide_session_token(&request) else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "missing X-Trust-Ide-Session" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(401));
+                    let _ = request.respond(response);
+                    continue;
+                };
+                let query = query_value(url.as_str(), "q").unwrap_or_default();
+                let limit = parse_limit(url.as_str()).unwrap_or(100).clamp(1, 1000) as usize;
+                let path = query_value(url.as_str(), "path");
+                let result = if let Some(path) = path {
+                    ide_state.file_symbols(
+                        session_token.as_str(),
+                        path.as_str(),
+                        query.as_str(),
+                        limit,
+                    )
+                } else {
+                    ide_state.workspace_symbols(session_token.as_str(), query.as_str(), limit)
+                };
+                match result {
+                    Ok(items) => {
+                        let response = Response::from_string(
+                            json!({ "ok": true, "result": items }).to_string(),
+                        )
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                        let _ = request.respond(response);
+                    }
+                    Err(error) => {
+                        let _ = request.respond(ide_error_response(error));
+                    }
+                }
+                continue;
+            }
+            if method == Method::Post
+                && (url == "/api/ide/build" || url == "/api/ide/test" || url == "/api/ide/validate")
+            {
+                let Some(session_token) = ide_session_token(&request) else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "missing X-Trust-Ide-Session" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(401));
+                    let _ = request.respond(response);
+                    continue;
+                };
+                if let Err(error) = ide_state.require_editor_session(session_token.as_str()) {
+                    let _ = request.respond(ide_error_response(error));
+                    continue;
+                }
+                let kind = if url.ends_with("/build") {
+                    "build"
+                } else if url.ends_with("/test") {
+                    "test"
+                } else {
+                    "validate"
+                };
+                let Some(project_root) = ide_state.active_project_root() else {
+                    let response = Response::from_string(
+                        json!({
+                            "ok": false,
+                            "error": "no active project selected; open a folder in the IDE first"
+                        })
+                        .to_string(),
+                    )
+                    .with_status_code(StatusCode(400))
+                    .with_header(Header::from_bytes("Content-Type", "application/json").unwrap());
+                    let _ = request.respond(response);
+                    continue;
+                };
+                let snapshot = start_ide_task_job(
+                    kind,
+                    project_root,
+                    ide_task_store.clone(),
+                    ide_task_seq.clone(),
+                );
+                let response =
+                    Response::from_string(json!({ "ok": true, "result": snapshot }).to_string())
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                let _ = request.respond(response);
+                continue;
+            }
+            if method == Method::Post && url == "/api/ide/format" {
+                let Some(session_token) = ide_session_token(&request) else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "missing X-Trust-Ide-Session" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(401));
+                    let _ = request.respond(response);
+                    continue;
+                };
+                let mut body = String::new();
+                if request.as_reader().read_to_string(&mut body).is_err() {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "invalid body" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(400));
+                    let _ = request.respond(response);
+                    continue;
+                }
+                let payload: IdeFormatRequest = match serde_json::from_str(&body) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        let response = Response::from_string(
+                            json!({ "ok": false, "error": "invalid json" }).to_string(),
+                        )
+                        .with_status_code(StatusCode(400));
+                        let _ = request.respond(response);
+                        continue;
+                    }
+                };
+                match ide_state.format_source(
+                    session_token.as_str(),
+                    payload.path.as_str(),
+                    payload.content,
+                ) {
+                    Ok(result) => {
+                        let response = Response::from_string(
+                            json!({ "ok": true, "result": result }).to_string(),
+                        )
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                        let _ = request.respond(response);
+                    }
+                    Err(error) => {
+                        let _ = request.respond(ide_error_response(error));
+                    }
+                }
+                continue;
+            }
+            if method == Method::Get && url.starts_with("/api/ide/task") {
+                let Some(session_token) = ide_session_token(&request) else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "missing X-Trust-Ide-Session" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(401));
+                    let _ = request.respond(response);
+                    continue;
+                };
+                if let Err(error) = ide_state.health(session_token.as_str()) {
+                    let _ = request.respond(ide_error_response(error));
+                    continue;
+                }
+                let Some(id_text) = query_value(url.as_str(), "id") else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "missing id" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(400))
+                    .with_header(Header::from_bytes("Content-Type", "application/json").unwrap());
+                    let _ = request.respond(response);
+                    continue;
+                };
+                let Ok(job_id) = id_text.parse::<u64>() else {
+                    let response = Response::from_string(
+                        json!({ "ok": false, "error": "invalid id" }).to_string(),
+                    )
+                    .with_status_code(StatusCode(400))
+                    .with_header(Header::from_bytes("Content-Type", "application/json").unwrap());
+                    let _ = request.respond(response);
+                    continue;
+                };
+                let snapshot = ide_task_snapshot(ide_task_store.clone(), job_id);
+                match snapshot {
+                    Some(task) => {
+                        let response = Response::from_string(
+                            json!({ "ok": true, "result": task }).to_string(),
+                        )
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                        let _ = request.respond(response);
+                    }
+                    None => {
+                        let response = Response::from_string(
+                            json!({ "ok": false, "error": "task not found" }).to_string(),
+                        )
+                        .with_status_code(StatusCode(404))
+                        .with_header(
+                            Header::from_bytes("Content-Type", "application/json").unwrap(),
+                        );
+                        let _ = request.respond(response);
                     }
                 }
                 continue;
@@ -1926,13 +3149,24 @@ fn check_auth(
     pairing: Option<&PairingStore>,
     required_role: AccessRole,
 ) -> Result<Option<String>, &'static str> {
+    check_auth_with_role(request, auth_mode, token, pairing, required_role)
+        .map(|(_role, request_token)| request_token)
+}
+
+fn check_auth_with_role(
+    request: &tiny_http::Request,
+    auth_mode: WebAuthMode,
+    token: &Arc<Mutex<Option<smol_str::SmolStr>>>,
+    pairing: Option<&PairingStore>,
+    required_role: AccessRole,
+) -> Result<(AccessRole, Option<String>), &'static str> {
     let Some((role, request_token)) = resolve_web_role(request, auth_mode, token, pairing) else {
         return Err("unauthorized");
     };
     if !role.allows(required_role) {
         return Err("forbidden");
     }
-    Ok(request_token)
+    Ok((role, request_token))
 }
 
 fn resolve_web_role(
@@ -1994,12 +3228,8 @@ fn ide_session_token(request: &tiny_http::Request) -> Option<String> {
         .map(|header| header.value.as_str().to_string())
 }
 
-fn ide_write_enabled(control_state: &ControlState) -> bool {
-    control_state
-        .control_mode
-        .lock()
-        .ok()
-        .is_some_and(|mode| matches!(*mode, ControlMode::Debug))
+fn ide_write_enabled(_control_state: &ControlState) -> bool {
+    true
 }
 
 fn ide_error_response(error: IdeError) -> Response<std::io::Cursor<Vec<u8>>> {
@@ -2036,6 +3266,271 @@ fn parse_limit(url: &str) -> Option<u64> {
         }
     }
     None
+}
+
+fn query_value(url: &str, key: &str) -> Option<String> {
+    let query = url.split('?').nth(1)?;
+    for pair in query.split('&') {
+        let mut parts = pair.splitn(2, '=');
+        if parts.next()? == key {
+            let raw = parts.next().unwrap_or_default();
+            return Some(decode_url_component(raw));
+        }
+    }
+    None
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn ide_task_to_snapshot(job: &IdeTaskJob) -> IdeTaskSnapshot {
+    IdeTaskSnapshot {
+        job_id: job.job_id,
+        kind: job.kind.clone(),
+        status: job.status.clone(),
+        success: job.success,
+        output: job.output.clone(),
+        locations: parse_task_locations(job.output.as_str()),
+        started_ms: job.started_ms,
+        finished_ms: job.finished_ms,
+    }
+}
+
+fn parse_task_locations(output: &str) -> Vec<IdeTaskLocation> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut locations = Vec::new();
+    for raw in output.lines() {
+        let line = raw.trim();
+        let line = line.strip_prefix("[stderr] ").unwrap_or(line);
+        let Some(location) = parse_task_location_line(line) else {
+            continue;
+        };
+        let key = format!("{}:{}:{}", location.path, location.line, location.column);
+        if seen.insert(key) {
+            locations.push(location);
+        }
+        if locations.len() >= 80 {
+            break;
+        }
+    }
+    locations
+}
+
+fn parse_task_location_line(line: &str) -> Option<IdeTaskLocation> {
+    let marker = ".st:";
+    let marker_pos = line.find(marker)?;
+    let path = line[..marker_pos + marker.len() - 1].trim().to_string();
+    if path.is_empty() {
+        return None;
+    }
+
+    let mut rest = &line[marker_pos + marker.len()..];
+    let line_end = rest
+        .find(|ch: char| !ch.is_ascii_digit())
+        .unwrap_or(rest.len());
+    if line_end == 0 {
+        return None;
+    }
+    let line_number = rest[..line_end].parse::<u32>().ok()?;
+    rest = &rest[line_end..];
+
+    let mut column_number = 1_u32;
+    if let Some(after_colon) = rest.strip_prefix(':') {
+        let column_end = after_colon
+            .find(|ch: char| !ch.is_ascii_digit())
+            .unwrap_or(after_colon.len());
+        if column_end > 0 {
+            column_number = after_colon[..column_end].parse::<u32>().unwrap_or(1);
+            rest = &after_colon[column_end..];
+        } else {
+            rest = after_colon;
+        }
+    }
+
+    let message = rest
+        .trim_start_matches(':')
+        .trim_start_matches('-')
+        .trim()
+        .to_string();
+    Some(IdeTaskLocation {
+        path,
+        line: line_number,
+        column: column_number,
+        message,
+    })
+}
+
+fn ide_task_snapshot(
+    store: Arc<Mutex<HashMap<u64, IdeTaskJob>>>,
+    job_id: u64,
+) -> Option<IdeTaskSnapshot> {
+    let guard = store.lock().ok()?;
+    guard.get(&job_id).map(ide_task_to_snapshot)
+}
+
+fn ide_task_append_output(store: &Arc<Mutex<HashMap<u64, IdeTaskJob>>>, job_id: u64, chunk: &str) {
+    const MAX_OUTPUT_BYTES: usize = 512 * 1024;
+    if let Ok(mut guard) = store.lock() {
+        if let Some(job) = guard.get_mut(&job_id) {
+            job.output.push_str(chunk);
+            if job.output.len() > MAX_OUTPUT_BYTES {
+                let excess = job.output.len() - MAX_OUTPUT_BYTES;
+                job.output.drain(..excess);
+            }
+        }
+    }
+}
+
+fn ide_task_finish(
+    store: &Arc<Mutex<HashMap<u64, IdeTaskJob>>>,
+    job_id: u64,
+    success: bool,
+    tail_message: &str,
+) {
+    if let Ok(mut guard) = store.lock() {
+        if let Some(job) = guard.get_mut(&job_id) {
+            job.status = "completed".to_string();
+            job.success = Some(success);
+            job.finished_ms = Some(now_ms());
+            if !tail_message.is_empty() {
+                job.output.push_str(tail_message);
+            }
+        }
+    }
+}
+
+fn stream_pipe_to_job<R: std::io::Read + Send + 'static>(
+    reader: R,
+    prefix: &'static str,
+    store: Arc<Mutex<HashMap<u64, IdeTaskJob>>>,
+    job_id: u64,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let buffered = BufReader::new(reader);
+        for line in buffered.lines().map_while(Result::ok) {
+            ide_task_append_output(&store, job_id, format!("{prefix}{line}\n").as_str());
+        }
+    })
+}
+
+fn start_ide_task_job(
+    kind: &str,
+    project_root: PathBuf,
+    store: Arc<Mutex<HashMap<u64, IdeTaskJob>>>,
+    seq: Arc<AtomicU64>,
+) -> IdeTaskSnapshot {
+    let job_id = seq.fetch_add(1, Ordering::Relaxed);
+    let job = IdeTaskJob {
+        job_id,
+        kind: kind.to_string(),
+        status: "running".to_string(),
+        success: None,
+        output: String::new(),
+        started_ms: now_ms(),
+        finished_ms: None,
+    };
+    if let Ok(mut guard) = store.lock() {
+        guard.insert(job_id, job.clone());
+    }
+
+    let kind_text = kind.to_string();
+    let store_bg = store.clone();
+    thread::spawn(move || {
+        let exe = match std::env::current_exe() {
+            Ok(path) => path,
+            Err(err) => {
+                ide_task_finish(
+                    &store_bg,
+                    job_id,
+                    false,
+                    format!("[error] cannot resolve runtime executable: {err}\n").as_str(),
+                );
+                return;
+            }
+        };
+        let mut command = Command::new(exe);
+        if kind_text == "build" {
+            command
+                .arg("build")
+                .arg("--project")
+                .arg(project_root.as_os_str())
+                .arg("--sources")
+                .arg("src");
+        } else if kind_text == "validate" {
+            command
+                .arg("validate")
+                .arg("--project")
+                .arg(project_root.as_os_str());
+        } else {
+            command
+                .arg("test")
+                .arg("--project")
+                .arg(project_root.as_os_str());
+        }
+        command
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .current_dir(project_root);
+
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(err) => {
+                ide_task_finish(
+                    &store_bg,
+                    job_id,
+                    false,
+                    format!("[error] failed to start task: {err}\n").as_str(),
+                );
+                return;
+            }
+        };
+
+        let stdout_handle = child
+            .stdout
+            .take()
+            .map(|stdout| stream_pipe_to_job(stdout, "", store_bg.clone(), job_id));
+        let stderr_handle = child
+            .stderr
+            .take()
+            .map(|stderr| stream_pipe_to_job(stderr, "[stderr] ", store_bg.clone(), job_id));
+
+        let wait_result = child.wait();
+        if let Some(handle) = stdout_handle {
+            let _ = handle.join();
+        }
+        if let Some(handle) = stderr_handle {
+            let _ = handle.join();
+        }
+
+        match wait_result {
+            Ok(status) => {
+                let success = status.success();
+                let tail = if success {
+                    "\n[done] task completed successfully\n".to_string()
+                } else {
+                    format!(
+                        "\n[failed] task exited with code {}\n",
+                        status.code().unwrap_or(-1)
+                    )
+                };
+                ide_task_finish(&store_bg, job_id, success, tail.as_str());
+            }
+            Err(err) => {
+                ide_task_finish(
+                    &store_bg,
+                    job_id,
+                    false,
+                    format!("\n[error] failed waiting for task: {err}\n").as_str(),
+                );
+            }
+        }
+    });
+
+    ide_task_to_snapshot(&job)
 }
 
 fn decode_url_component(input: &str) -> String {
@@ -2081,4 +3576,31 @@ fn parse_probe_response(text: &str) -> Value {
         .and_then(|v| v.as_str())
         .unwrap_or("online");
     json!({ "ok": true, "name": name, "state": state })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_task_location_line_extracts_st_coordinates() {
+        let parsed = parse_task_location_line("main.st:18:7 expected ';'")
+            .expect("expected parsed location");
+        assert_eq!(parsed.path, "main.st");
+        assert_eq!(parsed.line, 18);
+        assert_eq!(parsed.column, 7);
+        assert!(parsed.message.contains("expected"));
+    }
+
+    #[test]
+    fn parse_task_locations_deduplicates_repeated_hits() {
+        let output = "\
+[stderr] main.st:4:2 bad token\n\
+[stderr] main.st:4:2 bad token\n\
+[stderr] folder/aux.st:9:1 unresolved symbol\n";
+        let parsed = parse_task_locations(output);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].path, "main.st");
+        assert_eq!(parsed[1].path, "folder/aux.st");
+    }
 }

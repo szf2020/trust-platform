@@ -78,7 +78,17 @@ features, and go/no-go decision are documented in:
 Browser host example and build harness:
 - `docs/internal/prototypes/browser_analysis_wasm_spike/`
 - `scripts/build_browser_analysis_wasm_spike.sh`
+- `scripts/run_browser_analysis_wasm_spike_demo.sh`
 - `scripts/check_mp010_browser_analysis.sh`
+- `docs/guides/BROWSER_ANALYSIS_WASM_DEMO_SCRIPT.md`
+- `docs/guides/BROWSER_ANALYSIS_WASM_INTEGRATION_BRIEF.md`
+- `docs/guides/BROWSER_ANALYSIS_WASM_OPENPLC_EVENT_MAPPING.md`
+- `docs/guides/BROWSER_ANALYSIS_WASM_PARTNER_ACCEPTANCE_CHECKLIST.md`
+
+GitHub Pages static demo (all 7 LSP features, no server required):
+- `docs/demo/`
+- `docs/guides/BROWSER_ANALYSIS_WASM_GITHUB_PAGES.md`
+- `.github/workflows/demo-pages.yml`
 
 ## Editor Expansion (Neovim + Zed)
 

@@ -19,6 +19,8 @@ Stable shipped binaries: `trust-lsp`, `trust-runtime`, `trust-debug`, `trust-bun
 
 ## Demo
 
+- Browser IDE static demo (GitHub Pages-ready, no server required): `docs/demo/`
+
 ### Debug session with breakpoint + runtime
 ![Debug session with breakpoint + runtime](docs/media/debug.png)
 

@@ -124,6 +124,58 @@ pub struct CompletionItem {
     pub sort_priority: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReferencesRequest {
+    pub uri: String,
+    pub position: Position,
+    pub include_declaration: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReferenceItem {
+    pub uri: String,
+    pub range: Range,
+    pub is_write: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DefinitionRequest {
+    pub uri: String,
+    pub position: Position,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DefinitionItem {
+    pub uri: String,
+    pub range: Range,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DocumentHighlightRequest {
+    pub uri: String,
+    pub position: Position,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DocumentHighlightItem {
+    pub range: Range,
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RenameRequest {
+    pub uri: String,
+    pub position: Position,
+    pub new_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RenameEdit {
+    pub uri: String,
+    pub range: Range,
+    pub new_text: String,
+}
+
 #[derive(Debug, Default)]
 pub struct BrowserAnalysisEngine {
     project: Project,
@@ -286,6 +338,136 @@ impl BrowserAnalysisEngine {
         Ok(completion)
     }
 
+    pub fn references(&self, request: ReferencesRequest) -> EngineResult<Vec<ReferenceItem>> {
+        let file_id = self.file_id_for_uri(&request.uri)?;
+        let source = self.source_for_uri(&request.uri)?;
+        let Some(offset) = position_to_offset(source, request.position.clone()) else {
+            return Err(EngineError::new(format!(
+                "position {}:{} is outside document '{}'",
+                request.position.line, request.position.character, request.uri
+            )));
+        };
+        let include_declaration = request.include_declaration.unwrap_or(true);
+        let refs = self.project.with_database(|db| {
+            trust_ide::find_references(
+                db,
+                file_id,
+                TextSize::from(offset),
+                trust_ide::FindReferencesOptions {
+                    include_declaration,
+                },
+            )
+        });
+        let mut items: Vec<ReferenceItem> = refs
+            .into_iter()
+            .filter_map(|reference| {
+                let ref_uri = self.uri_for_file_id(reference.file_id)?;
+                let ref_source = self.source_for_uri(&ref_uri).ok()?;
+                Some(ReferenceItem {
+                    uri: ref_uri,
+                    range: lsp_range(ref_source, reference.range),
+                    is_write: reference.is_write,
+                })
+            })
+            .collect();
+        items.sort_by(|a, b| a.uri.cmp(&b.uri).then_with(|| a.range.cmp(&b.range)));
+        Ok(items)
+    }
+
+    pub fn definition(&self, request: DefinitionRequest) -> EngineResult<Option<DefinitionItem>> {
+        let file_id = self.file_id_for_uri(&request.uri)?;
+        let source = self.source_for_uri(&request.uri)?;
+        let Some(offset) = position_to_offset(source, request.position.clone()) else {
+            return Err(EngineError::new(format!(
+                "position {}:{} is outside document '{}'",
+                request.position.line, request.position.character, request.uri
+            )));
+        };
+        let result = self
+            .project
+            .with_database(|db| trust_ide::goto_definition(db, file_id, TextSize::from(offset)));
+        let item = result.and_then(|def| {
+            let def_uri = self.uri_for_file_id(def.file_id)?;
+            let def_source = self.source_for_uri(&def_uri).ok()?;
+            Some(DefinitionItem {
+                uri: def_uri,
+                range: lsp_range(def_source, def.range),
+            })
+        });
+        Ok(item)
+    }
+
+    pub fn document_highlight(
+        &self,
+        request: DocumentHighlightRequest,
+    ) -> EngineResult<Vec<DocumentHighlightItem>> {
+        let file_id = self.file_id_for_uri(&request.uri)?;
+        let source = self.source_for_uri(&request.uri)?;
+        let Some(offset) = position_to_offset(source, request.position.clone()) else {
+            return Err(EngineError::new(format!(
+                "position {}:{} is outside document '{}'",
+                request.position.line, request.position.character, request.uri
+            )));
+        };
+        let refs = self.project.with_database(|db| {
+            trust_ide::find_references(
+                db,
+                file_id,
+                TextSize::from(offset),
+                trust_ide::FindReferencesOptions {
+                    include_declaration: true,
+                },
+            )
+        });
+        let mut items: Vec<DocumentHighlightItem> = refs
+            .into_iter()
+            .filter(|reference| reference.file_id == file_id)
+            .map(|reference| DocumentHighlightItem {
+                range: lsp_range(source, reference.range),
+                kind: if reference.is_write {
+                    "write".to_string()
+                } else {
+                    "read".to_string()
+                },
+            })
+            .collect();
+        items.sort_by(|a, b| a.range.cmp(&b.range));
+        Ok(items)
+    }
+
+    pub fn rename(&self, request: RenameRequest) -> EngineResult<Vec<RenameEdit>> {
+        let file_id = self.file_id_for_uri(&request.uri)?;
+        let source = self.source_for_uri(&request.uri)?;
+        let Some(offset) = position_to_offset(source, request.position.clone()) else {
+            return Err(EngineError::new(format!(
+                "position {}:{} is outside document '{}'",
+                request.position.line, request.position.character, request.uri
+            )));
+        };
+        let result = self.project.with_database(|db| {
+            trust_ide::rename(db, file_id, TextSize::from(offset), &request.new_name)
+        });
+        let Some(rename_result) = result else {
+            return Ok(vec![]);
+        };
+        let mut edits: Vec<RenameEdit> = rename_result
+            .edits
+            .into_iter()
+            .filter_map(|(edit_file_id, file_edits)| {
+                let edit_uri = self.uri_for_file_id(edit_file_id)?;
+                let edit_source = self.source_for_uri(&edit_uri).ok()?;
+                Some(file_edits.into_iter().map(move |edit| RenameEdit {
+                    uri: edit_uri.clone(),
+                    range: lsp_range(edit_source, edit.range),
+                    new_text: edit.new_text,
+                }))
+            })
+            .flatten()
+            .collect();
+        edits.sort_by(|a, b| a.uri.cmp(&b.uri).then_with(|| a.range.cmp(&b.range)));
+        Ok(edits)
+    }
+
     pub fn status(&self) -> EngineStatus {
         EngineStatus {
             document_count: self.documents.len(),
@@ -305,6 +487,11 @@ impl BrowserAnalysisEngine {
         self.project
             .file_id_for_key(&key)
             .ok_or_else(|| EngineError::new(format!("document '{uri}' is not loaded")))
+    }
+
+    fn uri_for_file_id(&self, file_id: FileId) -> Option<String> {
+        let key = self.project.key_for_file_id(file_id)?;
+        Some(key.display())
     }
 }
 
@@ -364,6 +551,50 @@ impl WasmAnalysisEngine {
         let request: CompletionRequest = serde_json::from_str(request_json)
             .map_err(|err| format!("invalid completion request json: {err}"))?;
         let result = self.inner.completion(request)?;
+        json_string(&result)
+    }
+
+    #[cfg_attr(
+        all(target_arch = "wasm32", feature = "wasm"),
+        wasm_bindgen(js_name = referencesJson)
+    )]
+    pub fn references_json(&self, request_json: &str) -> Result<String, String> {
+        let request: ReferencesRequest = serde_json::from_str(request_json)
+            .map_err(|err| format!("invalid references request json: {err}"))?;
+        let result = self.inner.references(request)?;
+        json_string(&result)
+    }
+
+    #[cfg_attr(
+        all(target_arch = "wasm32", feature = "wasm"),
+        wasm_bindgen(js_name = definitionJson)
+    )]
+    pub fn definition_json(&self, request_json: &str) -> Result<String, String> {
+        let request: DefinitionRequest = serde_json::from_str(request_json)
+            .map_err(|err| format!("invalid definition request json: {err}"))?;
+        let result = self.inner.definition(request)?;
+        json_string(&result)
+    }
+
+    #[cfg_attr(
+        all(target_arch = "wasm32", feature = "wasm"),
+        wasm_bindgen(js_name = documentHighlightJson)
+    )]
+    pub fn document_highlight_json(&self, request_json: &str) -> Result<String, String> {
+        let request: DocumentHighlightRequest = serde_json::from_str(request_json)
+            .map_err(|err| format!("invalid documentHighlight request json: {err}"))?;
+        let result = self.inner.document_highlight(request)?;
+        json_string(&result)
+    }
+
+    #[cfg_attr(
+        all(target_arch = "wasm32", feature = "wasm"),
+        wasm_bindgen(js_name = renameJson)
+    )]
+    pub fn rename_json(&self, request_json: &str) -> Result<String, String> {
+        let request: RenameRequest = serde_json::from_str(request_json)
+            .map_err(|err| format!("invalid rename request json: {err}"))?;
+        let result = self.inner.rename(request)?;
         json_string(&result)
     }
 

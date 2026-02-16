@@ -10,7 +10,7 @@ use smol_str::SmolStr;
 use trust_runtime::bundle::detect_bundle_path;
 use trust_runtime::bundle_builder::resolve_sources_root;
 use trust_runtime::bytecode::BytecodeModule;
-use trust_runtime::config::RuntimeBundle;
+use trust_runtime::config::{RuntimeBundle, WebAuthMode, WebConfig};
 use trust_runtime::control::{
     spawn_hmi_descriptor_watcher, ControlEndpoint, ControlServer, ControlState,
     HmiRuntimeDescriptor, SourceFile, SourceRegistry,
@@ -196,6 +196,7 @@ pub fn run_runtime(
     simulation: bool,
     time_scale: u32,
 ) -> anyhow::Result<()> {
+    let ide_shell_mode = project.is_none() && config.is_none();
     let restart_mode = match restart.to_ascii_lowercase().as_str() {
         "cold" => RestartMode::Cold,
         "warm" => RestartMode::Warm,
@@ -222,8 +223,7 @@ pub fn run_runtime(
         );
         let runtime = session.build_runtime()?;
         (Some(bundle), runtime, sources)
-    } else {
-        let config_path = config.ok_or_else(|| anyhow::anyhow!("--config required"))?;
+    } else if let Some(config_path) = config {
         let runtime_root = runtime_root.unwrap_or_else(|| {
             config_path
                 .parent()
@@ -243,6 +243,23 @@ pub fn run_runtime(
                 })
                 .collect(),
         );
+        let runtime = session.build_runtime()?;
+        (None, runtime, sources)
+    } else {
+        let runtime_root = runtime_root
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."));
+        let bootstrap_source = SourceFile {
+            id: 0,
+            path: runtime_root.join("__ide_bootstrap__.st"),
+            text: "PROGRAM Main\nEND_PROGRAM\n".to_string(),
+        };
+        let sources = SourceRegistry::new(vec![bootstrap_source]);
+        let session =
+            CompileSession::from_sources(vec![trust_runtime::harness::SourceFile::with_path(
+                "__ide_bootstrap__.st",
+                "PROGRAM Main\nEND_PROGRAM\n".to_string(),
+            )]);
         let runtime = session.build_runtime()?;
         (None, runtime, sources)
     };
@@ -380,7 +397,7 @@ pub fn run_runtime(
         let token = bundle
             .as_ref()
             .and_then(|bundle| bundle.runtime.control_auth_token.as_ref());
-        if token.is_none() {
+        if token.is_none() && !ide_shell_mode {
             anyhow::bail!("tcp control endpoint requires runtime.control.auth_token");
         }
     }
@@ -454,8 +471,8 @@ pub fn run_runtime(
                 retain_save_interval: None,
             },
             WebSettings {
-                enabled: false,
-                listen: SmolStr::new("0.0.0.0:8080"),
+                enabled: ide_shell_mode,
+                listen: SmolStr::new("127.0.0.1:8082"),
                 auth: SmolStr::new("local"),
                 tls: false,
             },
@@ -504,6 +521,21 @@ pub fn run_runtime(
         .as_ref()
         .and_then(|bundle| bundle.runtime.control_auth_token.as_ref())
         .map(|token| token.to_string());
+    let web_config = if let Some(bundle) = &bundle {
+        bundle.runtime.web.clone()
+    } else {
+        let auth = if settings.web.auth.eq_ignore_ascii_case("token") {
+            WebAuthMode::Token
+        } else {
+            WebAuthMode::Local
+        };
+        WebConfig {
+            enabled: settings.web.enabled,
+            listen: settings.web.listen.clone(),
+            auth,
+            tls: settings.web.tls,
+        }
+    };
     let auth_token = Arc::new(Mutex::new(
         bundle
             .as_ref()
@@ -624,19 +656,15 @@ pub fn run_runtime(
         .as_ref()
         .map(|handle| handle.state())
         .unwrap_or_else(|| Arc::new(DiscoveryState::new()));
-    let _web = if let Some(bundle) = &bundle {
-        if bundle.runtime.web.enabled {
-            Some(start_web_server(
-                &bundle.runtime.web,
-                state.clone(),
-                Some(discovery_state.clone()),
-                pairing.clone(),
-                Some(bundle.root.clone()),
-                tls_materials.clone(),
-            )?)
-        } else {
-            None
-        }
+    let _web = if web_config.enabled {
+        Some(start_web_server(
+            &web_config,
+            state.clone(),
+            Some(discovery_state.clone()),
+            pairing.clone(),
+            bundle.as_ref().map(|bundle| bundle.root.clone()),
+            tls_materials.clone(),
+        )?)
     } else {
         None
     };
@@ -654,12 +682,9 @@ pub fn run_runtime(
     start_gate.open();
 
     if show_banner {
-        let web_url = bundle
-            .as_ref()
-            .filter(|bundle| bundle.runtime.web.enabled)
-            .map(|bundle| {
-                format_web_url(bundle.runtime.web.listen.as_str(), bundle.runtime.web.tls)
-            });
+        let web_url = web_config
+            .enabled
+            .then(|| format_web_url(web_config.listen.as_str(), web_config.tls));
         print_trust_banner(
             bundle.as_ref(),
             web_url.as_deref(),
