@@ -181,6 +181,10 @@ let activeFileIndex = 0;
 let models = [];
 let documentHighlightDecorations = [];
 let documentHighlightTimer = null;
+let lastSyncedVersionKey = "";
+let syncInFlight = null;
+let semanticIndexCache = null;
+let semanticIndexCacheKey = "";
 
 // ── Helpers ──────────────────────────────────────────
 
@@ -281,6 +285,238 @@ function findModelByUri(uri) {
   return index >= 0 ? models[index] : null;
 }
 
+function modelVersionKey() {
+  return models
+    .map((model, index) => `${DEMO_FILES[index].uri}:${model ? model.getVersionId() : 0}`)
+    .join("|");
+}
+
+function normalizeIdent(name) {
+  return String(name || "").trim().toLowerCase();
+}
+
+function parseVarSections(sourceText) {
+  const sections = [];
+  const regex = /\b(VAR(?:_INPUT|_OUTPUT|_IN_OUT|_GLOBAL|_TEMP|_STAT|_EXTERNAL|_ACCESS|_CONFIG)?(?:\s+CONSTANT)?)\b([\s\S]*?)END_VAR/gi;
+  let match;
+  while ((match = regex.exec(sourceText)) !== null) {
+    sections.push({
+      header: String(match[1] || "").trim().toUpperCase(),
+      body: match[2] || "",
+    });
+  }
+  return sections;
+}
+
+function parseSimpleDecls(sectionText) {
+  const decls = [];
+  for (const rawLine of String(sectionText || "").split(/\r?\n/)) {
+    const line = rawLine.replace(/\/\/.*$/, "");
+    const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([A-Za-z_][A-Za-z0-9_]*)\b/);
+    if (!match) continue;
+    decls.push({ name: match[1], typeName: match[2] });
+  }
+  return decls;
+}
+
+function getSemanticIndex() {
+  const cacheKey = modelVersionKey();
+  if (semanticIndexCache && semanticIndexCacheKey === cacheKey) {
+    return semanticIndexCache;
+  }
+
+  const variableTypesByUri = new Map();
+  const structFieldsByType = new Map();
+  const fbPublicMembersByType = new Map();
+  const fbMemberTypesByType = new Map();
+  const typeNames = new Set();
+
+  for (let i = 0; i < DEMO_FILES.length; i++) {
+    const file = DEMO_FILES[i];
+    const model = models[i];
+    const text = model ? model.getValue() : file.content;
+
+    const varsForFile = new Map();
+    for (const section of parseVarSections(text)) {
+      for (const decl of parseSimpleDecls(section.body)) {
+        varsForFile.set(normalizeIdent(decl.name), decl.typeName);
+      }
+    }
+    variableTypesByUri.set(file.uri, varsForFile);
+
+    const structRegex = /([A-Za-z_][A-Za-z0-9_]*)\s*:\s*STRUCT\b([\s\S]*?)END_STRUCT\s*;/gi;
+    let structMatch;
+    while ((structMatch = structRegex.exec(text)) !== null) {
+      const typeName = structMatch[1];
+      const fields = parseSimpleDecls(structMatch[2] || "");
+      structFieldsByType.set(normalizeIdent(typeName), fields);
+      typeNames.add(typeName);
+    }
+
+    const enumRegex = /([A-Za-z_][A-Za-z0-9_]*)\s*:\s*\(/gi;
+    let enumMatch;
+    while ((enumMatch = enumRegex.exec(text)) !== null) {
+      typeNames.add(enumMatch[1]);
+    }
+
+    const fbRegex = /FUNCTION_BLOCK\s+([A-Za-z_][A-Za-z0-9_]*)([\s\S]*?)END_FUNCTION_BLOCK/gi;
+    let fbMatch;
+    while ((fbMatch = fbRegex.exec(text)) !== null) {
+      const fbName = fbMatch[1];
+      const fbBody = fbMatch[2] || "";
+      const allMembers = new Map();
+      const publicMembers = [];
+      for (const section of parseVarSections(fbBody)) {
+        const decls = parseSimpleDecls(section.body);
+        for (const decl of decls) {
+          allMembers.set(normalizeIdent(decl.name), decl.typeName);
+        }
+        if (section.header === "VAR_OUTPUT" || section.header === "VAR_IN_OUT") {
+          for (const decl of decls) {
+            publicMembers.push(decl);
+          }
+        }
+      }
+      fbMemberTypesByType.set(normalizeIdent(fbName), allMembers);
+      fbPublicMembersByType.set(normalizeIdent(fbName), publicMembers);
+      typeNames.add(fbName);
+    }
+  }
+
+  semanticIndexCache = {
+    variableTypesByUri,
+    structFieldsByType,
+    fbPublicMembersByType,
+    fbMemberTypesByType,
+    typeNames: Array.from(typeNames).sort((a, b) => a.localeCompare(b)),
+  };
+  semanticIndexCacheKey = cacheKey;
+  return semanticIndexCache;
+}
+
+function memberFallbackSuggestions(model, position, baseSymbol, typedPrefix) {
+  const file = DEMO_FILES.find((f) => findModelByUri(f.uri) === model);
+  if (!file) return [];
+  const index = getSemanticIndex();
+  const varsForFile = index.variableTypesByUri.get(file.uri) || new Map();
+  const typeName = varsForFile.get(normalizeIdent(baseSymbol));
+  if (!typeName) return [];
+
+  const suggestions = [];
+  const structFields = index.structFieldsByType.get(normalizeIdent(typeName)) || [];
+  for (const field of structFields) {
+    suggestions.push({
+      label: field.name,
+      kind: monaco.languages.CompletionItemKind.Field,
+      detail: field.typeName,
+      insertText: field.name,
+    });
+  }
+
+  const fbMembers = index.fbPublicMembersByType.get(normalizeIdent(typeName)) || [];
+  for (const member of fbMembers) {
+    suggestions.push({
+      label: member.name,
+      kind: monaco.languages.CompletionItemKind.Property,
+      detail: member.typeName,
+      insertText: member.name,
+    });
+  }
+
+  const prefix = normalizeIdent(typedPrefix);
+  const filtered = suggestions.filter((item) => normalizeIdent(item.label).startsWith(prefix));
+  if (filtered.length === 0) return [];
+
+  const word = model.getWordUntilPosition(position);
+  const range = new monaco.Range(
+    position.lineNumber,
+    word.startColumn || position.column,
+    position.lineNumber,
+    word.endColumn || position.column,
+  );
+
+  const seen = new Set();
+  return filtered
+    .filter((item) => {
+      const key = normalizeIdent(item.label);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((item) => ({ ...item, range }));
+}
+
+function defaultFallbackSuggestions(model, position) {
+  const index = getSemanticIndex();
+  const word = model.getWordUntilPosition(position);
+  const range = new monaco.Range(
+    position.lineNumber,
+    word.startColumn || position.column,
+    position.lineNumber,
+    word.endColumn || position.column,
+  );
+  const prefix = normalizeIdent(word.word || "");
+  return index.typeNames
+    .filter((name) => prefix.length === 0 || normalizeIdent(name).startsWith(prefix))
+    .slice(0, 60)
+    .map((name) => ({
+      label: name,
+      kind: monaco.languages.CompletionItemKind.Class,
+      detail: "type",
+      insertText: name,
+      range,
+    }));
+}
+
+function fallbackCompletionSuggestions(model, position) {
+  const linePrefix = model
+    .getLineContent(position.lineNumber)
+    .slice(0, Math.max(0, position.column - 1));
+  const memberMatch = linePrefix.match(/([A-Za-z_][A-Za-z0-9_]*)\.\s*([A-Za-z_][A-Za-z0-9_]*)?$/);
+  if (memberMatch) {
+    const memberSuggestions = memberFallbackSuggestions(
+      model,
+      position,
+      memberMatch[1],
+      memberMatch[2] || "",
+    );
+    if (memberSuggestions.length > 0) {
+      return memberSuggestions;
+    }
+  }
+  return defaultFallbackSuggestions(model, position);
+}
+
+function mergeCompletionSuggestions(primary, fallback) {
+  const merged = [];
+  const seen = new Set();
+  for (const source of [primary || [], fallback || []]) {
+    for (const item of source) {
+      const key = `${normalizeIdent(item.label)}|${normalizeIdent(item.insertText)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(item);
+    }
+  }
+  return merged;
+}
+
+function repairHoverUnknownTypes(hoverText) {
+  if (typeof hoverText !== "string" || !hoverText.includes(": ?;")) return hoverText;
+  const fbMatch = hoverText.match(/FUNCTION_BLOCK\s+([A-Za-z_][A-Za-z0-9_]*)/);
+  if (!fbMatch) return hoverText;
+  const fbName = fbMatch[1];
+  const fbMembers = getSemanticIndex().fbMemberTypesByType.get(normalizeIdent(fbName));
+  if (!fbMembers || fbMembers.size === 0) return hoverText;
+  return hoverText.replace(
+    /^(\s*)([A-Za-z_][A-Za-z0-9_]*)\s*:\s*\?;/gm,
+    (line, indent, memberName) => {
+      const typeName = fbMembers.get(normalizeIdent(memberName));
+      return typeName ? `${indent}${memberName} : ${typeName};` : line;
+    },
+  );
+}
+
 // ── Monaco Setup ─────────────────────────────────────
 
 async function loadMonaco() {
@@ -375,7 +611,7 @@ async function loadWasmClient() {
   const { TrustWasmAnalysisClient } = await import("./wasm/analysis-client.js");
   wasmClient = new TrustWasmAnalysisClient({
     workerUrl: "./wasm/worker.js",
-    defaultTimeoutMs: 2000,
+    defaultTimeoutMs: 5000,
   });
   wasmClient.onStatus((status) => {
     if (status.type === "ready") {
@@ -391,11 +627,28 @@ async function loadWasmClient() {
 
 async function syncAllDocuments() {
   if (!wasmClient) return;
+  if (syncInFlight) {
+    try {
+      await syncInFlight;
+    } catch {
+      // Allow a fresh sync attempt below.
+    }
+  }
+  const versionKey = modelVersionKey();
+  if (versionKey === lastSyncedVersionKey) {
+    return;
+  }
   const documents = DEMO_FILES.map((f, i) => ({
     uri: f.uri,
     text: models[i] ? models[i].getValue() : f.content,
   }));
-  await wasmClient.applyDocuments(documents);
+  syncInFlight = wasmClient.applyDocuments(documents, 8000);
+  try {
+    await syncInFlight;
+    lastSyncedVersionKey = versionKey;
+  } finally {
+    syncInFlight = null;
+  }
 }
 
 // ── Diagnostics ──────────────────────────────────────
@@ -447,10 +700,11 @@ function registerProviders() {
       const file = DEMO_FILES.find((f) => findModelByUri(f.uri) === model);
       if (!file || !wasmClient) return { suggestions: [] };
       const cursor = fromMonacoPosition(position);
+      const fallback = fallbackCompletionSuggestions(model, position);
       try {
         await syncAllDocuments();
-        const items = await wasmClient.completion(file.uri, cursor, 80);
-        if (!Array.isArray(items) || items.length === 0) return { suggestions: [] };
+        const items = await wasmClient.completion(file.uri, cursor, 80, 5000);
+        if (!Array.isArray(items) || items.length === 0) return { suggestions: fallback };
         const defaultRange = fallbackCompletionRange(model, position);
         const suggestions = items
           .filter((item) => item && typeof item.label === "string" && item.label.length > 0)
@@ -475,9 +729,11 @@ function registerProviders() {
               filterText: item.filter_text || undefined,
             };
           });
-        return { suggestions: suggestions.length > 0 ? suggestions : [] };
-      } catch {
-        return { suggestions: [] };
+        const merged = mergeCompletionSuggestions(suggestions, fallback);
+        return { suggestions: merged };
+      } catch (error) {
+        console.warn("[demo] completion fallback:", error);
+        return { suggestions: fallback };
       }
     },
   });
@@ -489,9 +745,9 @@ function registerProviders() {
       if (!file || !wasmClient) return null;
       try {
         await syncAllDocuments();
-        const response = await wasmClient.hover(file.uri, fromMonacoPosition(position));
+        const response = await wasmClient.hover(file.uri, fromMonacoPosition(position), 3500);
         if (!response || !response.contents) return null;
-        const hoverText = normalizeHoverContentValue(response.contents);
+        const hoverText = repairHoverUnknownTypes(normalizeHoverContentValue(response.contents));
         if (!hoverText) return null;
         const hover = { contents: [{ value: hoverText }] };
         if (response.range) hover.range = toMonacoRange(response.range, model);
@@ -756,7 +1012,14 @@ function activateStep(index) {
       break;
     case 2: // Completion - show fb_pump.st, position after Status.
       switchToFile(1);
-      if (editor) editor.setPosition({ lineNumber: 17, column: 8 });
+      if (editor) {
+        editor.setPosition({ lineNumber: 17, column: 8 });
+        setTimeout(() => {
+          if (editor) {
+            editor.trigger("demo", "editor.action.triggerSuggest", {});
+          }
+        }, 60);
+      }
       break;
     case 3: // Definition - show fb_pump.st, position on E_PumpState
       switchToFile(1);
