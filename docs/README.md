@@ -90,6 +90,13 @@ GitHub Pages static demo (all 7 LSP features, no server required):
 - `docs/guides/BROWSER_ANALYSIS_WASM_GITHUB_PAGES.md`
 - `.github/workflows/demo-pages.yml`
 
+## Web IDE (`/ide`)
+
+Runtime-hosted product browser IDE documentation:
+- `docs/guides/WEB_IDE_FULL_BROWSER_GUIDE.md`
+- `docs/guides/WEB_IDE_ACCESSIBILITY_BASELINE.md`
+- `docs/guides/WEB_IDE_COLLABORATION_MODEL.md`
+
 ## Editor Expansion (Neovim + Zed)
 
 Official non-VS-Code LSP setup guides and reference configurations are

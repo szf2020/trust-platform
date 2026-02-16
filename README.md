@@ -154,6 +154,7 @@ starts a local runtime for debugging and inline values.
 ## Documentation
 
 - `docs/README.md` — documentation index and diagram workflow
+- `docs/guides/WEB_IDE_FULL_BROWSER_GUIDE.md` — runtime-hosted Browser IDE (`/ide`) usage and API surface
 - `docs/guides/HMI_DIRECTORY_WORKFLOW.md` — `hmi/` directory format, process SVG pages, and LM tool workflow
 - `examples/README.md` — guided example/tutorial tracks with setup walkthroughs
 - `docs/guides/PLC_QUICK_START.md` — hands-on quick start
