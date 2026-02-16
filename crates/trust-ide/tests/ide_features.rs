@@ -971,3 +971,36 @@ END_FUNCTION_BLOCK
         "Hover should show inheritance and implements"
     );
 }
+
+#[test]
+fn test_hover_function_block_uses_declared_type_when_type_resolution_is_unknown() {
+    let source = r#"
+FUNCTION_BLOCK FB_Pump
+VAR_INPUT
+    Command : ST_PumpCommand;
+END_VAR
+VAR_OUTPUT
+    Status : ST_PumpStatus;
+END_VAR
+END_FUNCTION_BLOCK
+"#;
+    let (db, file) = setup(source);
+    let fb_offset = TextSize::from(source.find("FB_Pump").unwrap() as u32);
+    let hover_result = hover(&db, file, fb_offset).expect("hover");
+
+    assert!(
+        hover_result.contents.contains("Command : ST_PumpCommand;"),
+        "Hover should preserve declared input type text when semantic type is unresolved. Hover:\n{}",
+        hover_result.contents
+    );
+    assert!(
+        hover_result.contents.contains("Status : ST_PumpStatus;"),
+        "Hover should preserve declared output type text when semantic type is unresolved. Hover:\n{}",
+        hover_result.contents
+    );
+    assert!(
+        !hover_result.contents.contains("Command : ?;") && !hover_result.contents.contains("Status : ?;"),
+        "Hover should avoid unresolved placeholders for explicitly declared member types. Hover:\n{}",
+        hover_result.contents
+    );
+}

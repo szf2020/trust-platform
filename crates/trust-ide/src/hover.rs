@@ -21,7 +21,7 @@ use crate::util::{
     namespace_path_for_symbol, scope_at_position, using_path_for_symbol, IdeContext,
     ResolvedTarget, SymbolFilter,
 };
-use crate::var_decl::var_decl_info_for_symbol;
+use crate::var_decl::{var_decl_info_for_name, var_decl_info_for_symbol};
 
 struct SymbolRenderContext<'a> {
     source: &'a str,
@@ -298,6 +298,11 @@ fn format_symbol(
     match &symbol.kind {
         SymbolKind::Variable { qualifier } => {
             let info = var_decl_info_for_symbol(render.root, render.source, render.range);
+            let resolved_type = type_name
+                .filter(|name| *name != "?")
+                .map(str::to_string)
+                .or(info.declared_type.clone())
+                .unwrap_or_else(|| "?".to_string());
             let mut qual = match qualifier {
                 VarQualifier::Input => "VAR_INPUT",
                 VarQualifier::Output => "VAR_OUTPUT",
@@ -314,23 +319,21 @@ fn format_symbol(
                 qual.push(' ');
                 qual.push_str(retention);
             }
-            result.push_str(&format!(
-                "({}) {} : {}",
-                qual,
-                symbol.name,
-                type_name.unwrap_or("?")
-            ));
+            result.push_str(&format!("({}) {} : {}", qual, symbol.name, resolved_type));
             if let Some(initializer) = info.initializer {
                 result.push_str(&format!(" := {}", initializer));
             }
         }
         SymbolKind::Constant => {
             let info = var_decl_info_for_symbol(render.root, render.source, render.range);
+            let resolved_type = type_name
+                .filter(|name| *name != "?")
+                .map(str::to_string)
+                .or(info.declared_type.clone())
+                .unwrap_or_else(|| "?".to_string());
             result.push_str(&format!(
                 "(CONSTANT) {}{} : {}",
-                header_prefix,
-                symbol.name,
-                type_name.unwrap_or("?")
+                header_prefix, symbol.name, resolved_type
             ));
             if let Some(initializer) = info.initializer {
                 result.push_str(&format!(" := {}", initializer));
@@ -783,11 +786,17 @@ fn format_function_block(
             _ => continue,
         };
 
-        let type_name =
-            type_name_for_id(symbols, member.type_id).unwrap_or_else(|| "?".to_string());
+        let info = var_decl_info_for_name(root, source, member.name.as_str());
+        let declared_type = info
+            .declared_type
+            .clone()
+            .or_else(|| declared_member_type_from_text(source, member.name.as_str()));
+        let type_name = type_name_for_id(symbols, member.type_id)
+            .filter(|name| name != "?")
+            .or(declared_type)
+            .unwrap_or_else(|| "?".to_string());
         let mut line = format!("    {} : {}", member.name, type_name);
-        if let Some(initializer) = var_decl_info_for_symbol(root, source, member.range).initializer
-        {
+        if let Some(initializer) = info.initializer {
             line.push_str(&format!(" := {}", initializer));
         }
         line.push(';');
@@ -824,6 +833,37 @@ fn format_function_block(
 
     lines.push("END_FUNCTION_BLOCK".to_string());
     lines.join("\n")
+}
+
+fn declared_member_type_from_text(text: &str, member_name: &str) -> Option<String> {
+    for raw_line in text.lines() {
+        let line = raw_line.split("//").next().unwrap_or("").trim();
+        if line.is_empty() || !line.contains(':') {
+            continue;
+        }
+        let (left, right) = line.split_once(':')?;
+        let names = left
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .collect::<Vec<_>>();
+        if !names
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(member_name))
+        {
+            continue;
+        }
+        let rhs = right.trim();
+        let rhs = rhs
+            .split_once(":=")
+            .map_or(rhs, |(before, _)| before)
+            .trim();
+        let rhs = rhs.split_once(';').map_or(rhs, |(before, _)| before).trim();
+        if !rhs.is_empty() {
+            return Some(rhs.to_string());
+        }
+    }
+    None
 }
 
 fn inheritance_lines(

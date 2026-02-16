@@ -13,6 +13,11 @@ review.
 No backend runtime is required; the analyzer runs fully in-browser via
 WebAssembly.
 
+Language intelligence shown in the demo (diagnostics, hover, completion,
+definition, references, highlights, rename) is sourced directly from the
+WASM analyzer/LSP pipeline only. The demo does not synthesize local fallback
+results when WASM requests fail or time out.
+
 ## Local verification
 
 1. Rebuild/copy demo assets:

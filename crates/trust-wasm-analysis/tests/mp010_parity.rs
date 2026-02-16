@@ -103,6 +103,50 @@ END_PROGRAM
 }
 
 #[test]
+fn completion_for_struct_member_access_returns_expected_members() {
+    let documents = load_plant_demo_documents();
+    let program_uri = "memory:///plant_demo/program.st";
+    let program_text = documents
+        .iter()
+        .find(|doc| doc.uri == program_uri)
+        .map(|doc| doc.text.as_str())
+        .expect("program source exists");
+
+    let completion_offset = program_text
+        .find("Status.State")
+        .map(|idx| idx as u32 + "Status.".len() as u32)
+        .expect("status member access anchor exists");
+    let request = CompletionRequest {
+        uri: program_uri.to_string(),
+        position: offset_to_position_utf16(program_text, completion_offset),
+        limit: Some(80),
+    };
+
+    let mut engine = BrowserAnalysisEngine::new();
+    engine
+        .replace_documents(documents)
+        .expect("load plant demo documents");
+    let completion = engine.completion(request).expect("completion");
+
+    let labels = completion
+        .iter()
+        .map(|item| item.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        labels.contains(&"State"),
+        "completion should include struct field 'State', got: {labels:?}"
+    );
+    assert!(
+        labels.contains(&"Running"),
+        "completion should include struct field 'Running', got: {labels:?}"
+    );
+    assert!(
+        labels.contains(&"ActualSpeed"),
+        "completion should include struct field 'ActualSpeed', got: {labels:?}"
+    );
+}
+
+#[test]
 fn wasm_json_adapter_contract_is_stable() {
     let mut engine = WasmAnalysisEngine::new();
     let bad_json = engine
