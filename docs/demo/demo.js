@@ -154,7 +154,7 @@ END_CONFIGURATION
 const WALKTHROUGH = [
   {
     title: "Diagnostics",
-    hint: "The project starts clean. Introduce a temporary typo (for example <kbd>Cmd.Enabl</kbd>) to see WASM squiggles and diagnostics update live.",
+    hint: "No squiggles are shown on startup because this project is clean. To demo diagnostics: open <kbd>program.st</kbd>, change <kbd>Cmd.Enable</kbd> to <kbd>Cmd.Enabl</kbd>, wait about 0.5s for squiggles/diagnostics, then change it back.",
   },
   {
     title: "Hover",
