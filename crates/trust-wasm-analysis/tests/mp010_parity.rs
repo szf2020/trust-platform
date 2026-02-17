@@ -549,6 +549,83 @@ fn references_for_program_variable_work_with_plain_demo_uris() {
 }
 
 #[test]
+fn definition_references_and_rename_accept_punctuation_adjacent_cursor_positions() {
+    let mut documents = load_plant_demo_documents();
+    for doc in &mut documents {
+        let file_name = doc
+            .uri
+            .rsplit('/')
+            .next()
+            .expect("document uri should have file name")
+            .to_string();
+        doc.uri = file_name;
+    }
+
+    let types_text = documents
+        .iter()
+        .find(|doc| doc.uri == "types.st")
+        .map(|doc| doc.text.clone())
+        .expect("types source exists");
+    let fb_text = documents
+        .iter()
+        .find(|doc| doc.uri == "fb_pump.st")
+        .map(|doc| doc.text.clone())
+        .expect("fb source exists");
+
+    let mut engine = BrowserAnalysisEngine::new();
+    engine
+        .replace_documents(documents)
+        .expect("load plain-uri documents");
+
+    let ramp_plus_offset = fb_text
+        .find("ramp + 0.2")
+        .map(|idx| idx as u32 + "ramp +".len() as u32 - 1)
+        .expect("ramp expression anchor exists");
+    let enum_def = engine
+        .definition(DefinitionRequest {
+            uri: "fb_pump.st".to_string(),
+            position: offset_to_position_utf16(&fb_text, ramp_plus_offset),
+        })
+        .expect("definition request at punctuation should succeed");
+    assert!(
+        enum_def.is_some(),
+        "definition should resolve when cursor is at punctuation adjacent to symbol"
+    );
+
+    let enable_colon_offset = types_text
+        .find("Enable : BOOL;")
+        .map(|idx| idx as u32 + "Enable ".len() as u32)
+        .expect("Enable declaration anchor exists");
+    let enable_refs = engine
+        .references(ReferencesRequest {
+            uri: "types.st".to_string(),
+            position: offset_to_position_utf16(&types_text, enable_colon_offset),
+            include_declaration: Some(true),
+        })
+        .expect("references request at punctuation should succeed");
+    assert!(
+        !enable_refs.is_empty(),
+        "references should resolve when cursor is at punctuation adjacent to field declaration"
+    );
+
+    let actual_speed_colon_offset = types_text
+        .find("ActualSpeed : REAL;")
+        .map(|idx| idx as u32 + "ActualSpeed ".len() as u32)
+        .expect("ActualSpeed declaration anchor exists");
+    let rename_edits = engine
+        .rename(RenameRequest {
+            uri: "types.st".to_string(),
+            position: offset_to_position_utf16(&types_text, actual_speed_colon_offset),
+            new_name: "ActualSpeedRpm".to_string(),
+        })
+        .expect("rename request at punctuation should succeed");
+    assert!(
+        !rename_edits.is_empty(),
+        "rename should resolve when cursor is at punctuation adjacent to declaration"
+    );
+}
+
+#[test]
 fn wasm_json_adapter_contract_is_stable() {
     let mut engine = WasmAnalysisEngine::new();
     let bad_json = engine

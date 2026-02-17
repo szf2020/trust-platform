@@ -123,17 +123,38 @@ pub fn scope_at_position(symbols: &SymbolTable, root: &SyntaxNode, offset: TextS
 /// Finds the identifier at a given offset in the source text.
 pub fn ident_at_offset(source: &str, offset: TextSize) -> Option<(&str, TextRange)> {
     let offset = u32::from(offset) as usize;
-    for token in lex(source) {
-        if let Some(hit) = ident_match_at(source, token.kind, token.range, offset) {
+    let tokens = lex(source);
+    if let Some(hit) = ident_match_at_offset(source, &tokens, offset) {
+        return Some(hit);
+    }
+
+    const MAX_LOOKBACK: usize = 4;
+    let bytes = source.as_bytes();
+    let mut fallback = offset.min(bytes.len());
+    for _ in 0..MAX_LOOKBACK {
+        if fallback == 0 {
+            break;
+        }
+        fallback -= 1;
+        let byte = bytes[fallback];
+        if byte.is_ascii_whitespace() || byte.is_ascii_punctuation() {
+            continue;
+        }
+        if let Some(hit) = ident_match_at_offset(source, &tokens, fallback) {
             return Some(hit);
         }
+        break;
     }
-    if offset == 0 {
-        return None;
-    }
-    let fallback = offset - 1;
-    for token in lex(source) {
-        if let Some(hit) = ident_match_at(source, token.kind, token.range, fallback) {
+    None
+}
+
+fn ident_match_at_offset<'a>(
+    source: &'a str,
+    tokens: &[trust_syntax::Token],
+    offset: usize,
+) -> Option<(&'a str, TextRange)> {
+    for token in tokens {
+        if let Some(hit) = ident_match_at(source, token.kind, token.range, offset) {
             return Some(hit);
         }
     }
@@ -383,7 +404,8 @@ pub(crate) fn resolve_target_at_position_with_context(
     symbols: &SymbolTable,
 ) -> Option<ResolvedTarget> {
     let (name, range) = ident_at_offset(source, position)?;
-    let scope_id = scope_at_position(symbols, root, position);
+    let anchor = range.start();
+    let scope_id = scope_at_position(symbols, root, anchor);
 
     if let Some(symbol) = symbols.iter().find(|sym| {
         if sym.range != range {
@@ -400,56 +422,62 @@ pub(crate) fn resolve_target_at_position_with_context(
         return Some(ResolvedTarget::Symbol(symbol.id));
     }
 
-    if let Some(token) = root.token_at_offset(position).right_biased() {
-        if let Some(name_node) = name_node_at_token(&token) {
-            if name_node.kind() == SyntaxKind::Name {
-                if let Some(field_target) = resolve_field_decl_target(symbols, &name_node, name) {
-                    return Some(ResolvedTarget::Field(field_target));
-                }
+    let token_candidates = [
+        root.token_at_offset(position).right_biased(),
+        root.token_at_offset(anchor).right_biased(),
+        root.token_at_offset(anchor).left_biased(),
+    ];
+    for token in token_candidates.into_iter().flatten() {
+        let Some(name_node) = name_node_at_token(&token) else {
+            continue;
+        };
+        if name_node.kind() == SyntaxKind::Name {
+            if let Some(field_target) = resolve_field_decl_target(symbols, &name_node, name) {
+                return Some(ResolvedTarget::Field(field_target));
+            }
 
-                if let Some(target) = resolve_field_target(db, file_id, symbols, &name_node, name) {
-                    return Some(target);
-                }
+            if let Some(target) = resolve_field_target(db, file_id, symbols, &name_node, name) {
+                return Some(target);
+            }
 
-                if let Some(field_expr) = name_node
-                    .parent()
-                    .filter(|parent| parent.kind() == SyntaxKind::FieldExpr)
-                {
-                    if let Some(parts) = qualified_name_from_field_expr(&field_expr) {
-                        if let Some(symbol_id) = symbols.resolve_qualified(&parts) {
-                            return Some(ResolvedTarget::Symbol(symbol_id));
-                        }
-                    }
-                }
-
-                if is_type_name_node(&name_node) {
-                    if let Some(parts) = qualified_name_parts_from_node(&name_node) {
-                        if let Some(symbol_id) = resolve_type_symbol(symbols, &parts, scope_id) {
-                            return Some(ResolvedTarget::Symbol(symbol_id));
-                        }
-                    } else if let Some(symbol_id) =
-                        resolve_type_symbol(symbols, &[SmolStr::new(name)], scope_id)
-                    {
+            if let Some(field_expr) = name_node
+                .parent()
+                .filter(|parent| parent.kind() == SyntaxKind::FieldExpr)
+            {
+                if let Some(parts) = qualified_name_from_field_expr(&field_expr) {
+                    if let Some(symbol_id) = symbols.resolve_qualified(&parts) {
                         return Some(ResolvedTarget::Symbol(symbol_id));
                     }
                 }
-            } else if name_node.kind() == SyntaxKind::NameRef {
-                if let Some(field_target) = resolve_field_decl_target(symbols, &name_node, name) {
-                    return Some(ResolvedTarget::Field(field_target));
-                }
+            }
 
-                if let Some(target) = resolve_field_target(db, file_id, symbols, &name_node, name) {
-                    return Some(target);
-                }
-
-                if let Some(field_expr) = name_node
-                    .parent()
-                    .filter(|parent| parent.kind() == SyntaxKind::FieldExpr)
+            if is_type_name_node(&name_node) {
+                if let Some(parts) = qualified_name_parts_from_node(&name_node) {
+                    if let Some(symbol_id) = resolve_type_symbol(symbols, &parts, scope_id) {
+                        return Some(ResolvedTarget::Symbol(symbol_id));
+                    }
+                } else if let Some(symbol_id) =
+                    resolve_type_symbol(symbols, &[SmolStr::new(name)], scope_id)
                 {
-                    if let Some(parts) = qualified_name_from_field_expr(&field_expr) {
-                        if let Some(symbol_id) = symbols.resolve_qualified(&parts) {
-                            return Some(ResolvedTarget::Symbol(symbol_id));
-                        }
+                    return Some(ResolvedTarget::Symbol(symbol_id));
+                }
+            }
+        } else if name_node.kind() == SyntaxKind::NameRef {
+            if let Some(field_target) = resolve_field_decl_target(symbols, &name_node, name) {
+                return Some(ResolvedTarget::Field(field_target));
+            }
+
+            if let Some(target) = resolve_field_target(db, file_id, symbols, &name_node, name) {
+                return Some(target);
+            }
+
+            if let Some(field_expr) = name_node
+                .parent()
+                .filter(|parent| parent.kind() == SyntaxKind::FieldExpr)
+            {
+                if let Some(parts) = qualified_name_from_field_expr(&field_expr) {
+                    if let Some(symbol_id) = symbols.resolve_qualified(&parts) {
+                        return Some(ResolvedTarget::Symbol(symbol_id));
                     }
                 }
             }

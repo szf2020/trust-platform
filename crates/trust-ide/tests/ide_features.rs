@@ -562,6 +562,60 @@ END_PROGRAM
 }
 
 #[test]
+fn test_symbol_navigation_and_rename_from_punctuation_adjacent_positions() {
+    let source = r#"
+TYPE
+    ST_PumpStatus :
+    STRUCT
+        ActualSpeed : REAL;
+    END_STRUCT;
+END_TYPE
+
+FUNCTION_BLOCK FB_Pump
+VAR
+    ramp : REAL;
+    Status : ST_PumpStatus;
+END_VAR
+
+ramp := ramp + 0.2;
+Status.ActualSpeed := ramp;
+END_FUNCTION_BLOCK
+"#;
+    let (db, file) = setup(source);
+
+    let ramp_plus_pos = TextSize::from(source.find("ramp + 0.2").unwrap() as u32 + 5);
+    let ramp_def = goto_definition(&db, file, ramp_plus_pos).expect("ramp definition");
+    let ramp_decl = TextSize::from(source.find("ramp : REAL").unwrap() as u32);
+    assert_eq!(
+        ramp_def.range.start(),
+        ramp_decl,
+        "definition should resolve when cursor is punctuation-adjacent"
+    );
+
+    let field_colon_pos = TextSize::from(
+        source.find("ActualSpeed : REAL").unwrap() as u32 + "ActualSpeed ".len() as u32,
+    );
+    let refs = find_references(
+        &db,
+        file,
+        field_colon_pos,
+        FindReferencesOptions {
+            include_declaration: true,
+        },
+    );
+    assert!(
+        refs.len() >= 2,
+        "references should resolve for punctuation-adjacent cursor on field declaration"
+    );
+
+    let renamed = rename(&db, file, field_colon_pos, "ActualSpeedRpm");
+    assert!(
+        renamed.is_some(),
+        "rename should resolve for punctuation-adjacent cursor on declaration"
+    );
+}
+
+#[test]
 fn test_rename_function_block_updates_type_usage_in_other_file() {
     let fb_source = r#"
 FUNCTION_BLOCK LevelControllerFb

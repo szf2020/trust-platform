@@ -754,7 +754,11 @@ function registerProviders() {
       }
     },
     async resolveRenameLocation(model, position) {
-      const word = model.getWordAtPosition(position);
+      const word = model.getWordAtPosition(position)
+        || model.getWordAtPosition({
+          lineNumber: position.lineNumber,
+          column: Math.max(1, position.column - 1),
+        });
       if (!word) return { rejectReason: "Not a renamable symbol" };
       return {
         range: new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn),
