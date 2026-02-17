@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LEGACY_TEST_FILE="${ROOT_DIR}/docs/internal/prototypes/browser_analysis_wasm_spike/web/analysis-client.test.mjs"
 DEMO_TEST_FILE="${ROOT_DIR}/docs/demo/lsp-position-resolver.test.mjs"
+WALKTHROUGH_TEST_FILE="${ROOT_DIR}/docs/demo/walkthrough-actions.test.mjs"
+MONACO_BUNDLE_IMPORTS_TEST_FILE="${ROOT_DIR}/crates/trust-runtime/web/ide-frontend/src/monaco-bundle-imports.test.mjs"
+MONACO_BUNDLE_ARTIFACT_TEST_FILE="${ROOT_DIR}/docs/demo/monaco-bundle-artifact.test.mjs"
 
 if ! command -v node >/dev/null 2>&1; then
   echo "error: node is required to run browser worker recovery tests."
@@ -20,6 +23,27 @@ if [[ -f "${DEMO_TEST_FILE}" ]]; then
   node --test "${DEMO_TEST_FILE}"
 else
   echo "error: missing demo LSP position fallback test: ${DEMO_TEST_FILE}"
+  exit 1
+fi
+
+if [[ -f "${WALKTHROUGH_TEST_FILE}" ]]; then
+  node --test "${WALKTHROUGH_TEST_FILE}"
+else
+  echo "error: missing demo walkthrough contract test: ${WALKTHROUGH_TEST_FILE}"
+  exit 1
+fi
+
+if [[ -f "${MONACO_BUNDLE_IMPORTS_TEST_FILE}" ]]; then
+  node --test "${MONACO_BUNDLE_IMPORTS_TEST_FILE}"
+else
+  echo "error: missing monaco bundle import contract test: ${MONACO_BUNDLE_IMPORTS_TEST_FILE}"
+  exit 1
+fi
+
+if [[ -f "${MONACO_BUNDLE_ARTIFACT_TEST_FILE}" ]]; then
+  node --test "${MONACO_BUNDLE_ARTIFACT_TEST_FILE}"
+else
+  echo "error: missing monaco bundle artifact contract test: ${MONACO_BUNDLE_ARTIFACT_TEST_FILE}"
   exit 1
 fi
 

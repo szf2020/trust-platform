@@ -16,6 +16,6 @@
     "@codemirror/lint": "6.9.4",
     "@codemirror/state": "6.5.4",
     "@codemirror/view": "6.39.14",
-    "monaco-editor": "0.52.2"
+    "monaco-editor": "0.55.1"
   }
 }

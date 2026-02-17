@@ -1,4 +1,5 @@
 import { buildRequestPositions } from "./lsp-position-resolver.js";
+import { getWalkthroughAction } from "./walkthrough-actions.js";
 
 // truST Demo – standalone GitHub Pages demo orchestration
 // Loads Monaco + WASM analysis engine, registers all 7 LSP providers.
@@ -168,11 +169,11 @@ const WALKTHROUGH = [
   },
   {
     title: "Go to Definition",
-    hint: "<kbd>Ctrl+Left-click</kbd> on <kbd>E_PumpState</kbd> in fb_pump.st to jump to its definition in types.st.",
+    hint: "In <kbd>program.st</kbd>, left-click <kbd>E_PumpState</kbd>, then press <kbd>F12</kbd> (or <kbd>Ctrl+Left-click</kbd>) to jump to its definition in types.st.",
   },
   {
     title: "Find References",
-    hint: "Left-click <kbd>Enable</kbd> first, then right-click and select <em>Go to References</em> (or press <kbd>Shift+F12</kbd>) to see every usage across files.",
+    hint: "Left-click <kbd>Enable</kbd> first, then press <kbd>Shift+F12</kbd> (or choose <em>Go to References</em>) to see every usage across files.",
   },
   {
     title: "Document Highlights",
@@ -195,13 +196,7 @@ let documentHighlightDecorations = [];
 let documentHighlightTimer = null;
 let lastSyncedVersionKey = "";
 let syncInFlight = null;
-const DEBUG_LSP = (() => {
-  try {
-    return new URLSearchParams(window.location.search).get("debug_lsp") === "1";
-  } catch {
-    return false;
-  }
-})();
+let editorOpenerDisposable = null;
 
 // ── Helpers ──────────────────────────────────────────
 
@@ -285,11 +280,6 @@ function fallbackCompletionRange(model, position) {
   );
 }
 
-function debugLog(event, payload) {
-  if (!DEBUG_LSP) return;
-  console.info(`[demo:lsp] ${event}`, payload);
-}
-
 function summarizeResult(result) {
   if (result == null) return "null";
   if (Array.isArray(result)) return `array(${result.length})`;
@@ -350,61 +340,19 @@ async function requestWithPositionFallback(
 ) {
   let lastError = null;
   const candidates = requestCandidates(model, position);
-  debugLog("request.start", {
-    operation: context.operation || "unknown",
-    fileUri: context.fileUri || "",
-    anchor: { lineNumber: position.lineNumber, column: position.column },
-    candidates: candidates.map((candidate) => ({
-      lineNumber: candidate.monaco.lineNumber,
-      column: candidate.monaco.column,
-      word: candidate.word,
-    })),
-  });
 
   for (let index = 0; index < candidates.length; index += 1) {
     const candidate = candidates[index];
     try {
       const result = await query(candidate.protocol);
       const ok = hasResult(result);
-      debugLog("request.candidate", {
-        operation: context.operation || "unknown",
-        fileUri: context.fileUri || "",
-        candidate: {
-          lineNumber: candidate.monaco.lineNumber,
-          column: candidate.monaco.column,
-          word: candidate.word,
-          index,
-        },
-        ok,
-        result: summarizeResult(result),
-      });
       if (ok) {
-        debugLog("request.success", {
-          operation: context.operation || "unknown",
-          fileUri: context.fileUri || "",
-          index,
-        });
         return result;
       }
     } catch (error) {
       lastError = error;
-      debugLog("request.error", {
-        operation: context.operation || "unknown",
-        fileUri: context.fileUri || "",
-        candidate: {
-          lineNumber: candidate.monaco.lineNumber,
-          column: candidate.monaco.column,
-          word: candidate.word,
-          index,
-        },
-        error: String(error?.message || error),
-      });
     }
   }
-  debugLog("request.empty", {
-    operation: context.operation || "unknown",
-    fileUri: context.fileUri || "",
-  });
   if (lastError) throw lastError;
   return null;
 }
@@ -438,6 +386,74 @@ function findModelByUri(uri) {
     return key === fileKey || key.endsWith(`/${fileKey}`);
   });
   return index >= 0 ? models[index] : null;
+}
+
+function findFileIndexByResource(resource) {
+  const raw = typeof resource === "string" ? resource : resource?.toString?.() || "";
+  if (!raw) return -1;
+  const byExactModel = models.findIndex(
+    (model) => model && String(model.uri?.toString?.() || "") === raw,
+  );
+  if (byExactModel >= 0) return byExactModel;
+
+  const key = normalizeDemoUri(raw);
+  return DEMO_FILES.findIndex((file) => {
+    const fileKey = normalizeDemoUri(file.uri);
+    return key === fileKey || key.endsWith(`/${fileKey}`);
+  });
+}
+
+function toSelectionOrPosition(selectionOrPosition, model) {
+  if (!selectionOrPosition || !model || !monaco) return null;
+  if (
+    Number.isFinite(selectionOrPosition.startLineNumber)
+    && Number.isFinite(selectionOrPosition.startColumn)
+  ) {
+    const startLine = clamp(selectionOrPosition.startLineNumber, 1, model.getLineCount());
+    const startCol = clamp(selectionOrPosition.startColumn, 1, model.getLineMaxColumn(startLine));
+    const endLine = Number.isFinite(selectionOrPosition.endLineNumber)
+      ? clamp(selectionOrPosition.endLineNumber, 1, model.getLineCount())
+      : startLine;
+    const endCol = Number.isFinite(selectionOrPosition.endColumn)
+      ? clamp(selectionOrPosition.endColumn, 1, model.getLineMaxColumn(endLine))
+      : startCol;
+    return new monaco.Selection(startLine, startCol, endLine, endCol);
+  }
+  if (
+    Number.isFinite(selectionOrPosition.lineNumber)
+    && Number.isFinite(selectionOrPosition.column)
+  ) {
+    const lineNumber = clamp(selectionOrPosition.lineNumber, 1, model.getLineCount());
+    const column = clamp(selectionOrPosition.column, 1, model.getLineMaxColumn(lineNumber));
+    return new monaco.Position(lineNumber, column);
+  }
+  return null;
+}
+
+function openResourceInEditor(resource, selectionOrPosition) {
+  const index = findFileIndexByResource(resource);
+  if (index < 0 || !editor || !models[index]) {
+    return false;
+  }
+
+  switchToFile(index);
+  const model = models[index];
+  if (editor.getModel() !== model) {
+    editor.setModel(model);
+  }
+
+  const selection = toSelectionOrPosition(selectionOrPosition, model);
+  if (selection instanceof monaco.Selection) {
+    editor.setSelection(selection);
+    editor.revealRangeInCenter(selection);
+  } else if (selection instanceof monaco.Position) {
+    editor.setPosition(selection);
+    editor.revealPositionInCenter(selection);
+  } else {
+    editor.revealLineInCenter(1);
+  }
+  editor.focus();
+  return true;
 }
 
 function modelVersionKey() {
@@ -880,13 +896,23 @@ async function updateDocumentHighlights() {
     documentHighlightDecorations = editor.deltaDecorations(documentHighlightDecorations, []);
     return;
   }
-  const position = fromMonacoPosition(editor.getPosition());
+  const anchor = editor.getPosition();
+  if (!anchor) {
+    documentHighlightDecorations = editor.deltaDecorations(documentHighlightDecorations, []);
+    return;
+  }
   try {
     await syncAllDocuments();
-    const highlights = await wasmClient.documentHighlight(
-      file.uri,
-      position,
-      REQUEST_TIMEOUT_MS.documentHighlight,
+    const highlights = await requestWithPositionFallback(
+      model,
+      anchor,
+      (cursor) => wasmClient.documentHighlight(
+        file.uri,
+        cursor,
+        REQUEST_TIMEOUT_MS.documentHighlight,
+      ),
+      (value) => Array.isArray(value) && value.length > 0,
+      { operation: "documentHighlight", fileUri: file.uri },
     );
     if (!Array.isArray(highlights) || highlights.length === 0) {
       documentHighlightDecorations = editor.deltaDecorations(documentHighlightDecorations, []);
@@ -931,7 +957,15 @@ function createEditor() {
     wordBasedSuggestions: "off",
     parameterHints: { enabled: true },
     snippetSuggestions: "inline",
-    hover: { enabled: "on", delay: 250, sticky: true },
+    hover: { enabled: "on", delay: 550, sticky: true },
+    definitionLinkOpensInPeek: false,
+    gotoLocation: {
+      multipleDefinitions: "goto",
+      multipleReferences: "peek",
+      multipleDeclarations: "peek",
+      multipleImplementations: "peek",
+      multipleTypeDefinitions: "peek",
+    },
     occurrencesHighlight: "singleFile",
     selectionHighlight: true,
     bracketPairColorization: { enabled: true },
@@ -939,6 +973,20 @@ function createEditor() {
     renderLineHighlight: "all",
     padding: { top: 8, bottom: 8 },
     theme: "trust-dark",
+  });
+
+  if (editorOpenerDisposable) {
+    try {
+      editorOpenerDisposable.dispose();
+    } catch {
+      // Best effort.
+    }
+    editorOpenerDisposable = null;
+  }
+  editorOpenerDisposable = monaco.editor.registerEditorOpener({
+    openCodeEditor(_source, resource, selectionOrPosition) {
+      return openResourceInEditor(resource, selectionOrPosition);
+    },
   });
 
   editor.onContextMenu((event) => {
@@ -1028,57 +1076,86 @@ function renderWalkthrough() {
 function activateStep(index) {
   const steps = dom.walkthroughSteps.querySelectorAll(".walkthrough-step");
   steps.forEach((s, i) => s.classList.toggle("active", i === index));
+  const action = getWalkthroughAction(index);
+  if (!action) return;
 
-  // Navigate to relevant file for the step
-  switch (index) {
-    case 0: // Diagnostics - show program.st
-      switchToFile(2);
-      break;
-    case 1: // Hover - show fb_pump.st, position on FB_Pump
-      switchToFile(1);
-      if (editor) editor.setPosition({ lineNumber: 1, column: 16 });
-      break;
-    case 2: // Completion - show fb_pump.st, position after Status.
-      switchToFile(1);
-      if (editor) {
-        editor.setPosition({ lineNumber: 17, column: 8 });
-        setTimeout(() => {
-          if (editor) {
-            editor.trigger("demo", "editor.action.triggerSuggest", {});
-          }
-        }, 60);
-      }
-      break;
-    case 3: // Definition - show fb_pump.st, position on E_PumpState
-      switchToFile(1);
-      if (editor) {
-        editor.setPosition({ lineNumber: 21, column: 22 });
-        editor.revealLineInCenter(21);
-      }
-      break;
-    case 4: // References - show types.st, position on Enable
-      switchToFile(0);
-      if (editor) {
-        editor.setPosition({ lineNumber: 6, column: 9 });
-        editor.revealLineInCenter(6);
-      }
-      break;
-    case 5: // Highlights - show fb_pump.st, position on ramp
-      switchToFile(1);
-      if (editor) {
-        editor.setPosition({ lineNumber: 10, column: 5 });
-        editor.revealLineInCenter(10);
-      }
-      break;
-    case 6: // Rename - show types.st, position on ActualSpeed
-      switchToFile(0);
-      if (editor) {
-        editor.setPosition({ lineNumber: 14, column: 9 });
-        editor.revealLineInCenter(14);
-      }
-      break;
+  switchToFile(action.fileIndex);
+  if (editor && action.focus) {
+    focusSymbolAt(action.focus);
+  }
+  if (editor && action.commandId) {
+    setTimeout(() => {
+      triggerEditorCommand(
+        action.commandId,
+        { retries: 4, retryDelayMs: 80 },
+      );
+    }, Math.max(0, Number(action.commandDelayMs || 0)));
   }
   if (editor) editor.focus();
+}
+
+function focusSymbolAt(position) {
+  if (!editor) return;
+  const model = editor.getModel();
+  if (!model) return;
+  const clampedLine = clamp(position?.lineNumber || 1, 1, model.getLineCount());
+  const clampedColumn = clamp(position?.column || 1, 1, model.getLineMaxColumn(clampedLine));
+  const word =
+    model.getWordAtPosition({ lineNumber: clampedLine, column: clampedColumn })
+    || model.getWordAtPosition({
+      lineNumber: clampedLine,
+      column: Math.max(1, clampedColumn - 1),
+    })
+    || model.getWordAtPosition({ lineNumber: clampedLine, column: clampedColumn + 1 });
+  if (word && Number.isFinite(word.startColumn) && Number.isFinite(word.endColumn)) {
+    const selection = new monaco.Selection(
+      clampedLine,
+      word.startColumn,
+      clampedLine,
+      word.endColumn,
+    );
+    editor.setSelection(selection);
+    editor.revealRangeInCenter(selection);
+  } else {
+    editor.setPosition({ lineNumber: clampedLine, column: clampedColumn });
+    editor.revealLineInCenter(clampedLine);
+  }
+  editor.focus();
+}
+
+async function triggerEditorCommand(commandId, options = {}) {
+  if (!editor || typeof commandId !== "string") return false;
+  const retries = Number.isFinite(options?.retries)
+    ? Math.max(1, Math.trunc(options.retries))
+    : 1;
+  const retryDelayMs = Number.isFinite(options?.retryDelayMs)
+    ? Math.max(0, Math.trunc(options.retryDelayMs))
+    : 0;
+  const args = options?.args ?? {};
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  try {
+    for (let attempt = 0; attempt < retries; attempt += 1) {
+      const action = typeof editor.getAction === "function" ? editor.getAction(commandId) : null;
+      const supported = typeof action?.isSupported === "function" ? action.isSupported() : null;
+      if (action && (supported == null || supported === true) && typeof action.run === "function") {
+        await action.run(args);
+        return true;
+      }
+
+      if (typeof editor.trigger === "function") {
+        editor.trigger("demo", commandId, args);
+        return true;
+      }
+
+      if (attempt + 1 < retries && retryDelayMs > 0) {
+        await sleep(retryDelayMs);
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
 }
 
 // ── Boot ─────────────────────────────────────────────

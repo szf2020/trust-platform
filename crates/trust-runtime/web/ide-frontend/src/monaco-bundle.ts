@@ -12,6 +12,10 @@ import "monaco-editor/esm/vs/editor/contrib/folding/browser/folding";
 import "monaco-editor/esm/vs/editor/contrib/snippet/browser/snippetController2";
 import "monaco-editor/esm/vs/editor/contrib/wordOperations/browser/wordOperations";
 import "monaco-editor/esm/vs/editor/contrib/comment/browser/comment";
+import "monaco-editor/esm/vs/editor/contrib/gotoSymbol/browser/goToCommands";
+import "monaco-editor/esm/vs/editor/contrib/gotoSymbol/browser/link/goToDefinitionAtPosition";
+import "monaco-editor/esm/vs/editor/contrib/rename/browser/rename";
+import "monaco-editor/esm/vs/editor/standalone/browser/referenceSearch/standaloneReferenceSearch";
 
 import editorCss from "monaco-editor/min/vs/editor/editor.main.css?inline";
 

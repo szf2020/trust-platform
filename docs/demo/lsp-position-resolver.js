@@ -108,7 +108,9 @@ function pushQualifiedNeighbors(lineText, tokens, anchorColumn, push) {
 }
 
 function pushNearbyColumns(push, anchorColumn, radius) {
-  for (let delta = -radius; delta <= radius; delta++) {
+  push(anchorColumn);
+  for (let delta = 1; delta <= radius; delta++) {
+    push(anchorColumn - delta);
     push(anchorColumn + delta);
   }
 }

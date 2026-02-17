@@ -105,3 +105,12 @@ test("buildRequestPositions clamps out-of-range input and keeps unique points", 
   const keys = new Set(points.map((point) => `${point.lineNumber}:${point.column}`));
   assert.equal(keys.size, points.length, "expected deduplicated candidate positions");
 });
+
+test("buildRequestPositions prioritizes anchor column before nearby fallback columns", () => {
+  const model = new MockModel("Status.ActualSpeed := 0.0;");
+  const anchorColumn = 8; // cursor right after "Status."
+  const points = buildRequestPositions(model, { lineNumber: 1, column: anchorColumn });
+
+  assert.ok(points.length > 0, "expected non-empty candidate list");
+  assert.equal(points[0].column, anchorColumn, "anchor column should be first candidate");
+});

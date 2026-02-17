@@ -9,8 +9,9 @@ use trust_hir::DiagnosticSeverity;
 use trust_ide::StdlibFilter;
 use trust_wasm_analysis::{
     ApplyDocumentsResult, BrowserAnalysisEngine, CompletionItem, CompletionRequest,
-    DefinitionRequest, DocumentInput, EngineStatus, HoverItem, HoverRequest, Position, Range,
-    ReferencesRequest, RelatedInfoItem, RenameRequest, WasmAnalysisEngine,
+    DefinitionRequest, DocumentHighlightRequest, DocumentInput, EngineStatus, HoverItem,
+    HoverRequest, Position, Range, ReferencesRequest, RelatedInfoItem, RenameRequest,
+    WasmAnalysisEngine,
 };
 
 #[test]
@@ -545,6 +546,46 @@ fn references_for_program_variable_work_with_plain_demo_uris() {
         refs.len() >= 3,
         "expected declaration + multiple HaltReq usages, got {}",
         refs.len()
+    );
+}
+
+#[test]
+fn document_highlight_for_local_symbol_returns_multiple_occurrences() {
+    let mut documents = load_plant_demo_documents();
+    for doc in &mut documents {
+        let file_name = doc
+            .uri
+            .rsplit('/')
+            .next()
+            .expect("document uri should have file name")
+            .to_string();
+        doc.uri = file_name;
+    }
+    let fb_text = documents
+        .iter()
+        .find(|doc| doc.uri == "fb_pump.st")
+        .map(|doc| doc.text.clone())
+        .expect("fb source exists");
+
+    let mut engine = BrowserAnalysisEngine::new();
+    engine
+        .replace_documents(documents)
+        .expect("load plain-uri documents");
+
+    let ramp_offset = fb_text
+        .find("ramp := ramp + 0.2;")
+        .expect("ramp expression exists") as u32;
+    let highlights = engine
+        .document_highlight(DocumentHighlightRequest {
+            uri: "fb_pump.st".to_string(),
+            position: offset_to_position_utf16(&fb_text, ramp_offset),
+        })
+        .expect("document highlight request should succeed");
+
+    assert!(
+        highlights.len() >= 3,
+        "expected multiple highlights for local symbol 'ramp', got {}",
+        highlights.len()
     );
 }
 
