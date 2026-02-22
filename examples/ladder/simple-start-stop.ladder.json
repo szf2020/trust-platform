@@ -1,0 +1,56 @@
+{
+  "rungs": [
+    {
+      "id": "rung_1",
+      "y": 100,
+      "elements": [
+        {
+          "id": "contact_1",
+          "type": "contact",
+          "contactType": "NO",
+          "variable": "%IX0.0",
+          "position": { "x": 100, "y": 100 }
+        },
+        {
+          "id": "coil_1",
+          "type": "coil",
+          "coilType": "NORMAL",
+          "variable": "%QX0.0",
+          "position": { "x": 300, "y": 100 }
+        }
+      ],
+      "connections": []
+    },
+    {
+      "id": "rung_2",
+      "y": 200,
+      "elements": [
+        {
+          "id": "contact_2",
+          "type": "contact",
+          "contactType": "NC",
+          "variable": "%IX0.1",
+          "position": { "x": 100, "y": 200 }
+        },
+        {
+          "id": "coil_2",
+          "type": "coil",
+          "coilType": "NORMAL",
+          "variable": "%QX0.1",
+          "position": { "x": 300, "y": 200 }
+        }
+      ],
+      "connections": []
+    }
+  ],
+  "variables": [
+    { "name": "%IX0.0", "type": "BOOL", "address": "%IX0.0" },
+    { "name": "%IX0.1", "type": "BOOL", "address": "%IX0.1" },
+    { "name": "%QX0.0", "type": "BOOL", "address": "%QX0.0" },
+    { "name": "%QX0.1", "type": "BOOL", "address": "%QX0.1" }
+  ],
+  "metadata": {
+    "name": "simple-start-stop",
+    "description": "Simple start/stop ladder logic"
+  }
+}

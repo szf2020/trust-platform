@@ -2315,9 +2315,11 @@
     "vscode:prepublish": "npm run compile",
     "build:panel": "node ./scripts/build-io-panel.js",
     "build:statechart": "node ./scripts/build-statechart-webview.js",
+    "build:blockly": "node ./scripts/build-blockly-webview.js",
+    "build:ladder": "node ./scripts/build-ladder-webview.js",
     "typecheck:webview": "tsc -p ./tsconfig.webview.json",
-    "compile": "npm run build:panel && npm run build:statechart && tsc -p ./ && npm run typecheck:webview",
-    "watch": "concurrently \"node ./scripts/watch-io-panel.js\" \"node ./scripts/build-statechart-webview.js --watch\"",
+    "compile": "npm run build:panel && npm run build:statechart && npm run build:blockly && npm run build:ladder && tsc -p ./ && npm run typecheck:webview",
+    "watch": "concurrently \"node ./scripts/watch-io-panel.js\" \"node ./scripts/build-statechart-webview.js --watch\" \"node ./scripts/build-blockly-webview.js --watch\" \"node ./scripts/build-ladder-webview.js --watch\"",
     "lint": "eslint src --ext ts,tsx",
     "test": "npm run compile && node ./out/test/runTest.js"
   },
@@ -2325,9 +2327,11 @@
     "@vscode/codicons": "^0.0.44",
     "@xyflow/react": "^12.10.0",
     "clsx": "^2.1.1",
+    "konva": "^9.3.22",
     "lucide-react": "^0.564.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
+    "react-konva": "^18.2.14",
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {
