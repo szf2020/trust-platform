@@ -15,6 +15,7 @@
   "exclude": [
     "node_modules",
     ".vscode-test",
-    "src/statechart/webview/**"
+    "src/statechart/webview/**",
+    "src/blockly/webview/**"
   ]
 }

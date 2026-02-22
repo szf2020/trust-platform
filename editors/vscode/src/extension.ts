@@ -15,6 +15,8 @@ import { defaultRuntimeControlEndpoint } from "./runtimeDefaults";
 import { registerNewProjectCommand } from "./newProject";
 import { registerNewStatechartCommand } from "./statechart/newStatechart";
 import { registerImportStatechartCommand } from "./statechart/importStatechart";
+import { newBlocklyCommand } from "./blockly/newBlockly";
+import { importBlocklyCommand } from "./blockly/importBlockly";
 import { registerPlcopenImportCommand } from "./plcopenImport";
 import { registerPlcopenExportCommand } from "./plcopenExport";
 import { registerStTestIntegration } from "./stTests";
@@ -24,6 +26,7 @@ import {
   registerNamespaceMoveContext,
 } from "./namespaceMove";
 import { StateChartEditorProvider } from "./statechart/stateChartEditor";
+import { BlocklyEditorProvider } from "./blockly/blocklyEditor";
 
 let client: LanguageClient | undefined;
 let showIecDiagnosticRefs = true;
@@ -181,6 +184,7 @@ export async function activate(context: vscode.ExtensionContext) {
   registerHmiPanel(context);
   registerLanguageModelTools(context, { getClient: () => client });
   context.subscriptions.push(StateChartEditorProvider.register(context));
+  context.subscriptions.push(BlocklyEditorProvider.register(context));
   registerStTestIntegration(context);
   await seedDefaultRuntimeControlEndpoint(context);
   const config = vscode.workspace.getConfiguration("trust-lsp");
@@ -225,6 +229,12 @@ export async function activate(context: vscode.ExtensionContext) {
   registerNewProjectCommand(context);
   registerNewStatechartCommand(context);
   registerImportStatechartCommand(context);
+  context.subscriptions.push(
+    vscode.commands.registerCommand("trust-lsp.blockly.new", newBlocklyCommand)
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand("trust-lsp.blockly.import", importBlocklyCommand)
+  );
   registerPlcopenImportCommand(context);
   registerPlcopenExportCommand(context);
   registerNamespaceMoveCommand(context, client);

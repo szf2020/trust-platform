@@ -98,7 +98,9 @@
     "onCommand:trust-lsp.test.runAll",
     "onCommand:trust-lsp.test.runOne",
     "onCommand:trust-lsp.statechart.new",
-    "onCommand:trust-lsp.statechart.import"
+    "onCommand:trust-lsp.statechart.import",
+    "onCommand:trust-lsp.blockly.new",
+    "onCommand:trust-lsp.blockly.import"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -2087,6 +2089,16 @@
           }
         ],
         "priority": "default"
+      },
+      {
+        "viewType": "trust-lsp.blockly.editor",
+        "displayName": "Blockly PLC Editor",
+        "selector": [
+          {
+            "filenamePattern": "*.blockly.json"
+          }
+        ],
+        "priority": "default"
       }
     ],
     "commands": [
@@ -2168,6 +2180,16 @@
       {
         "command": "trust-lsp.statechart.import",
         "title": "Structured Text: Import UML Statechart",
+        "category": "Structured Text"
+      },
+      {
+        "command": "trust-lsp.blockly.new",
+        "title": "Structured Text: New Blockly Program",
+        "category": "Structured Text"
+      },
+      {
+        "command": "trust-lsp.blockly.import",
+        "title": "Structured Text: Import Blockly Program",
         "category": "Structured Text"
       }
     ],
@@ -2315,15 +2337,17 @@
     "vscode:prepublish": "npm run compile",
     "build:panel": "node ./scripts/build-io-panel.js",
     "build:statechart": "node ./scripts/build-statechart-webview.js",
+    "build:blockly": "node ./scripts/build-blockly-webview.js",
     "typecheck:webview": "tsc -p ./tsconfig.webview.json",
-    "compile": "npm run build:panel && npm run build:statechart && tsc -p ./ && npm run typecheck:webview",
-    "watch": "concurrently \"node ./scripts/watch-io-panel.js\" \"node ./scripts/build-statechart-webview.js --watch\"",
+    "compile": "npm run build:panel && npm run build:statechart && npm run build:blockly && tsc -p ./ && npm run typecheck:webview",
+    "watch": "concurrently \"node ./scripts/watch-io-panel.js\" \"node ./scripts/build-statechart-webview.js --watch\" \"node ./scripts/build-blockly-webview.js --watch\"",
     "lint": "eslint src --ext ts,tsx",
     "test": "npm run compile && node ./out/test/runTest.js"
   },
   "dependencies": {
     "@vscode/codicons": "^0.0.44",
     "@xyflow/react": "^12.10.0",
+    "blockly": "^11.1.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.564.0",
     "react": "^19.2.4",
