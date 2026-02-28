@@ -53,7 +53,8 @@ jobs:
       - name: Build binaries
         run: |
           if [ "${{ matrix.cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }} -p trust-lsp -p trust-debug -p trust-runtime
+            CROSS_CONTAINER_OPTS="--env RUSTC_WRAPPER=" \
+              cross build --release --target ${{ matrix.target }} -p trust-lsp -p trust-debug -p trust-runtime
           else
             cargo build --release --target ${{ matrix.target }} -p trust-lsp -p trust-debug -p trust-runtime
           fi
