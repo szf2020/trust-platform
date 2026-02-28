@@ -57,7 +57,7 @@ expect-test = "1.5"
 insta = { version = "1", features = ["glob"] }
 
 # Utilities
-smol_str = "0.3"
+smol_str = "0.2.2"
 rustc-hash = "2.1"
 indexmap = "2"
 drop_bomb = "0.1"
@@ -74,6 +74,9 @@ dialoguer = "0.12"
 indicatif = "0.18"
 owo-colors = "4"
 rumqttc = "0.25"
+time = "=0.3.44"
+home = "=0.5.11"
+instability = "=0.3.10"
 
 # Internal crates
 trust-syntax = { path = "crates/trust-syntax" }
